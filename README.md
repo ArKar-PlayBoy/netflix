@@ -53,3 +53,4 @@ A Next.js movie discovery app powered by [TMDB](https://www.themoviedb.org/) (Th
 ## Deployment
 
 The easiest way to deploy is [Vercel](https://vercel.com/new). Make sure to add the `TMDB_TOKEN` environment variable in your Vercel project settings.
+# netflix
