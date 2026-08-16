@@ -58,3 +58,16 @@ export type VideoType = {
     type: string;
     official: boolean;
 }
+
+export type WatchProvider = {
+    logo_path: string;
+    provider_name: string;
+    provider_id: number;
+}
+
+export type WatchProvidersResult = {
+    link: string;
+    flatrate?: WatchProvider[];
+    rent?: WatchProvider[];
+    buy?: WatchProvider[];
+}

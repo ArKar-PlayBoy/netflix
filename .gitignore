@@ -39,3 +39,13 @@ yarn-error.log*
 # typescript
 *.tsbuildinfo
 next-env.d.ts
+
+# video files
+/data/movies/*.mp4
+/data/movies/*.mkv
+/data/movies/*.webm
+
+# database and cache files
+/data/*.json
+/data/*.db
+/data/*.bak

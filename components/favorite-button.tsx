@@ -3,39 +3,64 @@
 import { useEffect, useState } from "react";
 import { Heart } from "lucide-react";
 
+function safeGetFavorites(): number[] {
+  try {
+    const stored = localStorage.getItem("favorites");
+    return stored ? JSON.parse(stored) : [];
+  } catch {
+    return [];
+  }
+}
+
+function safeSetFavorites(ids: number[]) {
+  try {
+    localStorage.setItem("favorites", JSON.stringify(ids));
+  } catch {
+    // localStorage quota exceeded or unavailable
+  }
+}
+
 export default function FavoriteButton({ movieId }: { movieId: number }) {
   const [isFavorite, setIsFavorite] = useState(false);
+  const [mounted, setMounted] = useState(false);
 
   useEffect(() => {
-    const stored = localStorage.getItem("favorites");
-    const ids: number[] = stored ? JSON.parse(stored) : [];
-    setIsFavorite(ids.includes(movieId));
+    setIsFavorite(safeGetFavorites().includes(movieId));
+    setMounted(true);
   }, [movieId]);
 
   const toggle = () => {
-    const stored = localStorage.getItem("favorites");
-    let ids: number[] = stored ? JSON.parse(stored) : [];
+    const ids = safeGetFavorites();
 
     if (isFavorite) {
-      ids = ids.filter((id) => id !== movieId);
+      safeSetFavorites(ids.filter((id) => id !== movieId));
     } else {
       ids.push(movieId);
+      safeSetFavorites(ids);
     }
 
-    localStorage.setItem("favorites", JSON.stringify(ids));
     setIsFavorite(!isFavorite);
   };
+
+  if (!mounted) {
+    return (
+      <div className="inline-flex items-center gap-2 px-4 py-2 rounded-lg border text-sm font-medium bg-card text-muted-foreground border-border">
+        <Heart className="h-4 w-4" />
+        Add to Favorites
+      </div>
+    );
+  }
 
   return (
     <button
       onClick={toggle}
-      className={`inline-flex items-center gap-2 px-4 py-2 rounded-lg border text-sm font-medium transition ${
+      className={`inline-flex items-center gap-2 px-4 py-2 rounded-lg border text-sm font-medium transition-all duration-200 ${
         isFavorite
-          ? "bg-red-500/10 text-red-500 border-red-500"
-          : "bg-card text-muted-foreground border-border hover:border-primary"
+          ? "bg-netflix/10 text-netflix border-netflix/30 hover:bg-netflix/20"
+          : "bg-card text-muted-foreground border-border hover:border-netflix/50 hover:text-foreground"
       }`}
     >
-      <Heart className={`h-4 w-4 ${isFavorite ? "fill-red-500" : ""}`} />
+      <Heart className={`h-4 w-4 transition-all ${isFavorite ? "fill-netflix text-netflix" : ""}`} />
       {isFavorite ? "Favorited" : "Add to Favorites"}
     </button>
   );
