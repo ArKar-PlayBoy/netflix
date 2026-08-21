@@ -69,9 +69,11 @@ export default function UploadsPage() {
       const { file } = item;
       update(file, { status: "uploading", progress: 0 });
       const contentType = file.type || "video/mp4";
+      const key = file.name;
+      let uploadId: string | null = null;
 
       try {
-        // 1. Create multipart session
+        // 1. Create multipart session (BEGIN)
         const cRes = await fetch("/api/admin/upload", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
@@ -79,7 +81,7 @@ export default function UploadsPage() {
         });
         const cData = await cRes.json();
         if (!cData.success) throw new Error(cData.error || "Failed to start upload");
-        const { key, uploadId } = cData.data as { key: string; uploadId: string };
+        uploadId = cData.data.uploadId as string;
 
         // 2. Upload parts (limited concurrency)
         const totalParts = Math.max(1, Math.ceil(file.size / CHUNK_SIZE));
@@ -130,22 +132,16 @@ export default function UploadsPage() {
           message: `${(fData.data.size / 1024 / 1024).toFixed(1)} MB stored`,
         });
       } catch (err) {
-        // Best-effort cleanup of the partial upload
-        try {
-          const cRes = await fetch("/api/admin/upload", {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ action: "create", fileName: file.name, contentType }),
-          });
-          const cData = await cRes.json().catch(() => null);
-          if (cData?.success) {
+        // ROLLBACK: abort the real session so R2 discards all uploaded parts
+        if (uploadId) {
+          try {
             await fetch("/api/admin/upload", {
               method: "POST",
               headers: { "Content-Type": "application/json" },
-              body: JSON.stringify({ action: "abort", key: file.name, uploadId: cData.data.uploadId }),
+              body: JSON.stringify({ action: "abort", key, uploadId }),
             });
-          }
-        } catch {}
+          } catch {}
+        }
         update(file, { status: "error", message: err instanceof Error ? err.message : "Upload failed" });
       }
     },
