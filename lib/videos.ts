@@ -13,6 +13,7 @@ import {
 export type VideoRecord = DBVideoRecord;
 
 export type VideoInput = {
+  mediaType?: "movie" | "tv";
   tmdbId: number | null;
   title: string;
   year?: string | null;
@@ -44,6 +45,7 @@ export async function getVideoByTmdbId(tmdbId: number): Promise<VideoRecord | nu
 
 export async function createVideo(data: VideoInput): Promise<number> {
   return dbCreate({
+    media_type: data.mediaType ?? "movie",
     tmdb_id: data.tmdbId,
     title: data.title,
     year: data.year ?? null,
@@ -59,6 +61,7 @@ export async function createVideo(data: VideoInput): Promise<number> {
 
 export async function updateVideo(id: number, data: Partial<VideoInput>): Promise<void> {
   const update: Record<string, unknown> = {};
+  if (data.mediaType !== undefined) update.media_type = data.mediaType;
   if (data.tmdbId !== undefined) update.tmdb_id = data.tmdbId;
   if (data.title !== undefined) update.title = data.title;
   if (data.year !== undefined) update.year = data.year;
@@ -77,6 +80,7 @@ export async function deleteVideo(id: number): Promise<VideoRecord | null> {
 
 export async function upsertVideo(data: VideoInput): Promise<number> {
   return dbUpsert({
+    media_type: data.mediaType ?? "movie",
     tmdb_id: data.tmdbId,
     title: data.title,
     year: data.year ?? null,

@@ -1,4 +1,4 @@
-import { createScanLog, updateScanLog } from "./db";
+import { createScanLog, updateScanLog, upsertEpisode } from "./db";
 import { upsertVideo } from "./videos";
 import { listVideoFiles, isR2Configured } from "./r2";
 
@@ -61,6 +61,53 @@ async function fetchMovieDetails(id: number, token: string) {
   }
 }
 
+async function searchTV(query: string, token: string) {
+  try {
+    const res = await fetch(
+      `${TMDB_BASE}/search/tv?query=${encodeURIComponent(query)}&include_adult=false&language=en-US&page=1`,
+      { headers: { Authorization: `Bearer ${token}` } }
+    );
+    if (!res.ok) return null;
+    const data = await res.json();
+    return data.results?.[0] ?? null;
+  } catch {
+    return null;
+  }
+}
+
+async function fetchTVDetails(id: number, token: string) {
+  try {
+    const res = await fetch(`${TMDB_BASE}/tv/${id}?language=en-US`, {
+      headers: { Authorization: `Bearer ${token}` },
+    });
+    if (!res.ok) return null;
+    return res.json();
+  } catch {
+    return null;
+  }
+}
+
+// Detect S01E02 / s1e2 / 1x02 patterns
+function detectEpisodePattern(filename: string): { seriesName: string; season: number; episode: number } | null {
+  const se = filename.match(/^(.*?)[\s._-]*[sS](\d{1,2})[eE](\d{1,3})/);
+  if (se) {
+    return {
+      seriesName: se[1].replace(/[._]+/g, " ").replace(/\s+/g, " ").trim(),
+      season: parseInt(se[2]),
+      episode: parseInt(se[3]),
+    };
+  }
+  const x = filename.match(/^(\d{1,2})x(\d{1,3})[\s._-]+(.*)$/);
+  if (x) {
+    return {
+      seriesName: x[3].replace(/[._]+/g, " ").replace(/\s+/g, " ").trim(),
+      season: parseInt(x[1]),
+      episode: parseInt(x[2]),
+    };
+  }
+  return null;
+}
+
 export type ScanResult = {
   logId: number;
   status: "completed" | "failed";
@@ -99,8 +146,14 @@ export async function runScan(): Promise<ScanResult> {
   try {
     const filesByTmdbId: Record<string, string[]> = {};
     const filesWithNoId: string[] = [];
+    const tvFiles: { file: string; seriesName: string; season: number; episode: number }[] = [];
 
     for (const file of files) {
+      const tvPattern = detectEpisodePattern(file);
+      if (tvPattern && tvPattern.seriesName) {
+        tvFiles.push({ file, ...tvPattern });
+        continue;
+      }
       const tmdbId = extractIdFromFilename(file);
       if (tmdbId) {
         const key = tmdbId.toString();
@@ -108,6 +161,45 @@ export async function runScan(): Promise<ScanResult> {
         filesByTmdbId[key].push(file);
       } else {
         filesWithNoId.push(file);
+      }
+    }
+
+    // ===== TV series files =====
+    const tvCache: { id: number; name: string; details: Record<string, unknown> | null }[] = [];
+    for (const tv of tvFiles) {
+      try {
+        let series = tvCache.find((s) => s.name.toLowerCase() === tv.seriesName.toLowerCase());
+        if (!series) {
+          const result = await searchTV(tv.seriesName, token);
+          if (!result) {
+            errors.push(`TV series not found: ${tv.seriesName}`);
+            unmatched++;
+            continue;
+          }
+          const details = await fetchTVDetails(result.id, token);
+          series = { id: result.id, name: result.name, details };
+          tvCache.push(series);
+        }
+
+        const quality = detectQuality(tv.file);
+        const videoId = await upsertVideo({
+          mediaType: "tv",
+          tmdbId: series.id,
+          title: series.name,
+          year: (series.details as { first_air_date?: string })?.first_air_date?.split("-")[0] ?? null,
+          posterPath: (series.details as { poster_path?: string })?.poster_path ?? null,
+          backdropPath: (series.details as { backdrop_path?: string })?.backdrop_path ?? null,
+          overview: (series.details as { overview?: string })?.overview ?? "",
+          voteAverage: (series.details as { vote_average?: number })?.vote_average ?? 0,
+          file: tv.file,
+          qualities: [{ quality, file: tv.file }],
+        });
+
+        await upsertEpisode(videoId, tv.season, tv.episode, tv.file, quality);
+        matched++;
+      } catch (err) {
+        errors.push(`TV error ${tv.file}: ${err}`);
+        unmatched++;
       }
     }
 

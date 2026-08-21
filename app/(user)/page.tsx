@@ -68,7 +68,16 @@ export default async function Home() {
     popular: [],
   }));
 
-  const featured = data.nowPlaying[0];
+  // Hero: only already-released movies, rotating daily so it never goes stale
+  const today = new Date();
+  const released = data.nowPlaying.filter(
+    (m) => m.release_date && new Date(m.release_date) <= today
+  );
+  const heroPool = (released.length > 0 ? released : data.nowPlaying).slice(0, 7);
+  const dayOfYear = Math.floor(
+    (today.getTime() - new Date(today.getFullYear(), 0, 0).getTime()) / 86400000
+  );
+  const featured = heroPool[dayOfYear % heroPool.length];
 
   return (
     <div>

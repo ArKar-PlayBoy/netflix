@@ -1,15 +1,16 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { Search, Loader2, Link2, Film, CheckCircle, AlertTriangle } from "lucide-react";
+import { Search, Loader2, Link2, Film, CheckCircle, AlertTriangle, Tv } from "lucide-react";
 import { Button } from "@/components/ui/button";
 
-type TmdbMovie = {
+type TmdbResult = {
   id: number;
   title: string;
-  release_date: string;
+  year: string | null;
   poster_path: string | null;
   vote_average: number;
+  media_type: "movie" | "tv";
 };
 
 type UnlinkedVideo = {
@@ -23,12 +24,14 @@ export default function LinkPage() {
   const [videos, setVideos] = useState<UnlinkedVideo[]>([]);
   const [selected, setSelected] = useState<UnlinkedVideo | null>(null);
   const [query, setQuery] = useState("");
-  const [results, setResults] = useState<TmdbMovie[]>([]);
+  const [results, setResults] = useState<TmdbResult[]>([]);
   const [searching, setSearching] = useState(false);
   const [linking, setLinking] = useState<number | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [message, setMessage] = useState<string | null>(null);
+  const [tvSeason, setTvSeason] = useState("1");
+  const [tvEpisode, setTvEpisode] = useState("1");
 
   const fetchVideos = async () => {
     setLoading(true);
@@ -72,19 +75,28 @@ export default function LinkPage() {
     }
   };
 
-  const handleLink = async (movie: TmdbMovie) => {
+  const handleLink = async (result: TmdbResult) => {
     if (!selected) return;
-    setLinking(movie.id);
+    const isTv = result.media_type === "tv";
+    if (isTv && (!/^\d+$/.test(tvSeason) || !/^\d+$/.test(tvEpisode))) {
+      setMessage("Enter valid season and episode numbers for TV shows");
+      return;
+    }
+    setLinking(result.id);
     setMessage(null);
     try {
       const res = await fetch("/api/admin/link", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ videoId: selected.id, tmdbId: movie.id }),
+        body: JSON.stringify({
+          videoId: selected.id,
+          tmdbId: result.id,
+          ...(isTv ? { season: parseInt(tvSeason), episode: parseInt(tvEpisode) } : {}),
+        }),
       });
       const data = await res.json();
       if (data.success) {
-        setMessage(`Linked "${selected.file}" to ${data.data?.title ?? movie.title}`);
+        setMessage(`Linked "${selected.file}" to ${data.data?.title ?? result.title} (${data.data?.type})`);
         setSelected(null);
         setResults([]);
         setQuery("");
@@ -103,7 +115,7 @@ export default function LinkPage() {
     <div>
       <h1 className="text-2xl font-bold mb-6">Manual Link</h1>
       <p className="text-muted-foreground mb-6">
-        Pick an unlinked video file, then search TMDB and attach the correct movie.
+        Pick an unlinked video file, then search TMDB — movies and TV shows both supported.
       </p>
 
       {message && (
@@ -163,7 +175,7 @@ export default function LinkPage() {
               type="text"
               value={query}
               onChange={(e) => setQuery(e.target.value)}
-              placeholder="Search TMDB for a movie..."
+              placeholder="Search TMDB for a movie or TV show..."
               className="flex-1 px-4 py-3 rounded-lg border bg-card text-sm focus:outline-none focus:ring-2 focus:ring-netflix/50"
             />
             <button
@@ -178,14 +190,14 @@ export default function LinkPage() {
 
           {results.length > 0 && (
             <div className="space-y-3 max-w-2xl">
-              {results.map((movie) => (
+              {results.map((result) => (
                 <div
-                  key={movie.id}
+                  key={`${result.media_type}-${result.id}`}
                   className="flex items-center gap-4 p-4 rounded-xl border bg-card hover:border-netflix/50 transition-colors"
                 >
-                  {movie.poster_path ? (
+                  {result.poster_path ? (
                     <img
-                      src={`https://image.tmdb.org/t/p/w92${movie.poster_path}`}
+                      src={`https://image.tmdb.org/t/p/w92${result.poster_path}`}
                       alt=""
                       className="w-12 h-18 rounded object-cover"
                     />
@@ -193,17 +205,49 @@ export default function LinkPage() {
                     <div className="w-12 h-18 rounded bg-muted" />
                   )}
                   <div className="flex-1 min-w-0">
-                    <p className="font-medium truncate">{movie.title}</p>
+                    <div className="flex items-center gap-2">
+                      <p className="font-medium truncate">{result.title}</p>
+                      <span
+                        className={`px-1.5 py-0.5 rounded text-[10px] font-bold uppercase ${
+                          result.media_type === "tv" ? "bg-blue-500/15 text-blue-500" : "bg-netflix/10 text-netflix"
+                        }`}
+                      >
+                        {result.media_type === "tv" ? "TV" : "Movie"}
+                      </span>
+                    </div>
                     <p className="text-sm text-muted-foreground">
-                      {movie.release_date?.split("-")[0]} | TMDB #{movie.id}
+                      {result.year || "—"} | TMDB #{result.id}
                     </p>
+
+                    {/* Season/episode inputs for TV */}
+                    {result.media_type === "tv" && (
+                      <div className="flex items-center gap-2 mt-2">
+                        <Tv className="h-3.5 w-3.5 text-muted-foreground" />
+                        <label className="text-xs text-muted-foreground">S</label>
+                        <input
+                          type="number"
+                          min={1}
+                          value={tvSeason}
+                          onChange={(e) => setTvSeason(e.target.value)}
+                          className="w-16 px-2 py-1 rounded border bg-background text-sm"
+                        />
+                        <label className="text-xs text-muted-foreground">E</label>
+                        <input
+                          type="number"
+                          min={1}
+                          value={tvEpisode}
+                          onChange={(e) => setTvEpisode(e.target.value)}
+                          className="w-16 px-2 py-1 rounded border bg-background text-sm"
+                        />
+                      </div>
+                    )}
                   </div>
                   <button
-                    onClick={() => handleLink(movie)}
-                    disabled={linking === movie.id}
+                    onClick={() => handleLink(result)}
+                    disabled={linking === result.id}
                     className="px-4 py-2 bg-netflix/10 text-netflix rounded-lg text-sm font-medium hover:bg-netflix/20 transition-colors disabled:opacity-50 flex items-center gap-2"
                   >
-                    {linking === movie.id ? (
+                    {linking === result.id ? (
                       <Loader2 className="h-3 w-3 animate-spin" />
                     ) : (
                       <Link2 className="h-3 w-3" />

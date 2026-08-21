@@ -1,6 +1,7 @@
 import type { Metadata } from "next";
 import { MovieType, CastType, VideoType, WatchProvidersResult } from "@/types/global";
 import { getVideoByTmdbId } from "@/lib/videos";
+import { getEpisodesForSeries } from "@/lib/db";
 import Link from "next/link";
 import Image from "next/image";
 import { ArrowLeft, Star, Clock } from "lucide-react";
@@ -10,13 +11,13 @@ import MoviePlayer from "@/components/movie-player";
 import FavoriteButton from "@/components/favorite-button";
 import WatchlistButton from "@/components/watchlist-button";
 import RatingStars from "@/components/rating-stars";
-import CommentsSection from "@/components/comments-section";
+import SeasonsList from "@/components/seasons-list";
 
 const IMG = "https://image.tmdb.org/t/p";
 const PROVIDER_IMG = "https://image.tmdb.org/t/p/w92";
 
-async function fetchMovie(id: string): Promise<MovieType> {
-  const res = await fetch(`https://api.themoviedb.org/3/movie/${id}?language=en-US`, {
+async function fetchMovie(id: string, base: string = "movie"): Promise<MovieType> {
+  const res = await fetch(`https://api.themoviedb.org/3/${base}/${id}?language=en-US`, {
     headers: { Authorization: `Bearer ${process.env.TMDB_TOKEN}` },
     next: { revalidate: 3600 },
   });
@@ -24,8 +25,8 @@ async function fetchMovie(id: string): Promise<MovieType> {
   return res.json();
 }
 
-async function fetchCredits(id: string): Promise<{ cast: CastType[]; directors: string[] }> {
-  const res = await fetch(`https://api.themoviedb.org/3/movie/${id}/credits?language=en-US`, {
+async function fetchCredits(id: string, base: string = "movie"): Promise<{ cast: CastType[]; directors: string[] }> {
+  const res = await fetch(`https://api.themoviedb.org/3/${base}/${id}/credits?language=en-US`, {
     headers: { Authorization: `Bearer ${process.env.TMDB_TOKEN}` },
     next: { revalidate: 3600 },
   });
@@ -37,8 +38,8 @@ async function fetchCredits(id: string): Promise<{ cast: CastType[]; directors: 
   };
 }
 
-async function fetchVideos(id: string): Promise<VideoType[]> {
-  const res = await fetch(`https://api.themoviedb.org/3/movie/${id}/videos?language=en-US`, {
+async function fetchVideos(id: string, base: string = "movie"): Promise<VideoType[]> {
+  const res = await fetch(`https://api.themoviedb.org/3/${base}/${id}/videos?language=en-US`, {
     headers: { Authorization: `Bearer ${process.env.TMDB_TOKEN}` },
     next: { revalidate: 86400 },
   });
@@ -55,8 +56,8 @@ async function fetchVideos(id: string): Promise<VideoType[]> {
   ];
 }
 
-async function fetchSimilar(id: string): Promise<MovieType[]> {
-  const res = await fetch(`https://api.themoviedb.org/3/movie/${id}/similar?language=en-US&page=1`, {
+async function fetchSimilar(id: string, base: string = "movie"): Promise<MovieType[]> {
+  const res = await fetch(`https://api.themoviedb.org/3/${base}/${id}/similar?language=en-US&page=1`, {
     headers: { Authorization: `Bearer ${process.env.TMDB_TOKEN}` },
     next: { revalidate: 3600 },
   });
@@ -65,8 +66,8 @@ async function fetchSimilar(id: string): Promise<MovieType[]> {
   return data.results?.slice(0, 10) || [];
 }
 
-async function fetchWatchProviders(id: string): Promise<{ us: WatchProvidersResult | null }> {
-  const res = await fetch(`https://api.themoviedb.org/3/movie/${id}/watch/providers`, {
+async function fetchWatchProviders(id: string, base: string = "movie"): Promise<{ us: WatchProvidersResult | null }> {
+  const res = await fetch(`https://api.themoviedb.org/3/${base}/${id}/watch/providers`, {
     headers: { Authorization: `Bearer ${process.env.TMDB_TOKEN}` },
     next: { revalidate: 86400 },
   });
@@ -96,13 +97,19 @@ async function getLocalVideoData(id: string): Promise<{
 export async function generateMetadata({ params }: { params: Promise<{ id: string }> }): Promise<Metadata> {
   const { id } = await params;
   try {
-    const movie = await fetchMovie(id);
+    let base = "movie";
+    try {
+      const dbVideo = await getVideoByTmdbId(parseInt(id));
+      if (dbVideo?.media_type === "tv") base = "tv";
+    } catch {}
+    const movie = await fetchMovie(id, base);
+    const title = movie.title ?? (movie as unknown as { name?: string }).name ?? "Vionix";
     return {
-      title: `${movie.title} — Movie App`,
-      description: movie.overview?.slice(0, 160) || "View movie details.",
+      title: `${title} — Vionix`,
+      description: movie.overview?.slice(0, 160) || "View details.",
     };
   } catch {
-    return { title: "Movie — Movie App" };
+    return { title: "Vionix" };
   }
 }
 
@@ -115,12 +122,28 @@ function formatRuntime(minutes: number): string {
 
 export default async function MoviePage({ params }: { params: Promise<{ id: string }> }) {
   const { id } = await params;
+
+  // Detect TV vs movie from our DB first
+  let base = "movie";
+  let dbVideoId: number | null = null;
+  let episodes: Awaited<ReturnType<typeof getEpisodesForSeries>> = [];
+  try {
+    const dbVideo = await getVideoByTmdbId(parseInt(id));
+    if (dbVideo) {
+      dbVideoId = dbVideo.id;
+      if (dbVideo.media_type === "tv") {
+        base = "tv";
+        episodes = await getEpisodesForSeries(dbVideo.id);
+      }
+    }
+  } catch {}
+
   const [movie, credits, videos, similar, watchProviders, localVideoData] = await Promise.all([
-    fetchMovie(id).catch(() => null),
-    fetchCredits(id).catch(() => ({ cast: [], directors: [] })),
-    fetchVideos(id).catch(() => []),
-    fetchSimilar(id).catch(() => []),
-    fetchWatchProviders(id).catch(() => ({ us: null })),
+    fetchMovie(id, base).catch(() => null),
+    fetchCredits(id, base).catch(() => ({ cast: [], directors: [] })),
+    fetchVideos(id, base).catch(() => []),
+    fetchSimilar(id, base).catch(() => []),
+    fetchWatchProviders(id, base).catch(() => ({ us: null })),
     getLocalVideoData(id),
   ]);
 
@@ -128,7 +151,7 @@ export default async function MoviePage({ params }: { params: Promise<{ id: stri
     return (
       <div className="min-h-screen flex items-center justify-center">
         <div className="text-center">
-          <h1 className="text-2xl font-bold mb-2">Movie not found</h1>
+          <h1 className="text-2xl font-bold mb-2">Title not found</h1>
           <Link href="/">
             <Button variant="outline">Go Home</Button>
           </Link>
@@ -138,6 +161,16 @@ export default async function MoviePage({ params }: { params: Promise<{ id: stri
   }
 
   const trailer = videos[0];
+
+  // Normalize TV shape → movie shape (name→title, first_air_date→release_date, episode runtime)
+  if (base === "tv") {
+    const tv = movie as unknown as Record<string, unknown>;
+    const m = movie as unknown as Record<string, unknown>;
+    m.title = m.title ?? tv.name;
+    m.release_date = m.release_date ?? tv.first_air_date;
+    const epRunTime = tv.episode_run_time as number[] | undefined;
+    m.runtime = m.runtime ?? (Array.isArray(epRunTime) ? epRunTime[0] : 0) ?? 0;
+  }
 
   return (
     <div className="min-h-screen">
@@ -220,7 +253,7 @@ export default async function MoviePage({ params }: { params: Promise<{ id: stri
             <div className="flex flex-wrap items-center gap-4 mb-4">
               <div className="flex items-center gap-1 text-yellow-500">
                 <Star className="h-5 w-5 fill-current" />
-                <span className="font-bold text-lg">{movie.vote_average.toFixed(1)}</span>
+                <span className="font-bold text-lg">{(movie.vote_average ?? 0).toFixed(1)}</span>
                 <span className="text-muted-foreground text-sm">/ 10</span>
               </div>
               {movie.runtime > 0 && (
@@ -248,6 +281,7 @@ export default async function MoviePage({ params }: { params: Promise<{ id: stri
                 trailerKey={trailer?.key ?? null}
                 qualities={localVideoData.qualities}
                 subtitles={localVideoData.subtitles}
+                backdropUrl={movie.backdrop_path ? `https://image.tmdb.org/t/p/w1280${movie.backdrop_path}` : null}
               />
               <FavoriteButton movieId={movie.id} />
               <WatchlistButton movieId={movie.id} />
@@ -327,10 +361,12 @@ export default async function MoviePage({ params }: { params: Promise<{ id: stri
         </div>
       </div>
 
-      {/* Comments */}
-      <div className="max-w-7xl mx-auto px-4 md:px-8 py-10 border-t border-border">
-        <CommentsSection movieId={movie.id} />
-      </div>
+      {/* Episodes (TV series) */}
+      {dbVideoId && episodes.length > 0 && (
+        <div className="max-w-7xl mx-auto px-4 md:px-8 py-10 border-t border-border">
+          <SeasonsList videoId={dbVideoId} episodes={episodes} />
+        </div>
+      )}
 
       {similar.length > 0 && (
         <div className="max-w-7xl mx-auto px-4 md:px-8 py-10 border-t border-border">

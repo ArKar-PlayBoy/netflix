@@ -2,8 +2,7 @@
 
 import { useEffect, useState } from "react";
 import Link from "next/link";
-import { Play, Film, Loader2 } from "lucide-react";
-import { Button } from "@/components/ui/button";
+import { Film, Loader2 } from "lucide-react";
 
 type Genre = { id: string; name: string };
 
@@ -49,30 +48,27 @@ export default function GenreSidebar() {
   }, []);
 
   return (
-    <div className="space-y-1">
-      <Button variant="ghost" className="w-full justify-start" asChild>
-        <Link href="/">
-          <Film className="mr-2 h-4 w-4" />
-          All Movies
-        </Link>
-      </Button>
+    <div className="space-y-0.5">
+      <Link
+        href="/"
+        className="flex items-center gap-2 px-2 py-1.5 rounded-md text-[13px] font-medium hover:bg-muted hover:text-netflix transition-colors"
+      >
+        <Film className="h-3.5 w-3.5" />
+        All Movies
+      </Link>
       {loading ? (
         <div className="flex items-center justify-center py-4">
           <Loader2 className="h-4 w-4 animate-spin text-muted-foreground" />
         </div>
       ) : (
         genres.map((genre) => (
-          <Button
+          <Link
             key={genre.id}
-            variant="ghost"
-            className="w-full justify-start"
-            asChild
+            href={`/genre/${genre.name}/${genre.id}`}
+            className="block px-2 py-1 rounded-md text-[13px] text-muted-foreground hover:text-netflix hover:bg-muted transition-colors"
           >
-            <Link href={`/genre/${genre.name}/${genre.id}`}>
-              <Play className="mr-2 h-4 w-4" />
-              {genre.name}
-            </Link>
-          </Button>
+            {genre.name}
+          </Link>
         ))
       )}
     </div>

@@ -119,10 +119,6 @@ export default function SettingsPage() {
           </div>
           <div className="p-5 space-y-4">
             <div>
-              <label className="text-sm font-medium block mb-1.5">App Name</label>
-              <input type="text" value={settings.app_name || ""} onChange={(e) => update("app_name", e.target.value)} className={inputClass} />
-            </div>
-            <div>
               <label className="text-sm font-medium block mb-1.5">TMDB Region</label>
               <input
                 type="text"

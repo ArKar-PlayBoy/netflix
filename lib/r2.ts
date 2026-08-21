@@ -77,6 +77,14 @@ export async function getPresignedUploadUrl(key: string, contentType: string): P
   return getSignedUrl(r2, cmd, { expiresIn: 3600 });
 }
 
+// Short-lived direct-download URL — viewer pulls bytes from Cloudflare edge,
+// bypassing our server entirely (scales infinitely, zero server bandwidth)
+export async function getPresignedStreamUrl(key: string, expiresIn: number = 900): Promise<string> {
+  const r2 = getR2();
+  const cmd = new GetObjectCommand({ Bucket: getBucket(), Key: key });
+  return getSignedUrl(r2, cmd, { expiresIn });
+}
+
 // Multipart upload — large files are sent in parts with per-part retry
 export async function createMultipart(key: string, contentType: string): Promise<string> {
   const res = await getR2().send(

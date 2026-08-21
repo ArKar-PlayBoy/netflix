@@ -28,6 +28,7 @@ function getSql() {
 export type VideoRecord = {
   id: number;
   tmdb_id: number | null;
+  media_type: "movie" | "tv";
   title: string;
   year: string | null;
   poster_path: string | null;
@@ -39,6 +40,16 @@ export type VideoRecord = {
   subtitles: { lang: string; label: string; file: string }[];
   created_at: string;
   updated_at: string;
+};
+
+export type EpisodeRecord = {
+  id: number;
+  video_id: number;
+  season: number;
+  episode: number;
+  name: string | null;
+  file: string;
+  qualities: { quality: string; file: string }[];
 };
 
 export type ScanLog = {
@@ -117,6 +128,7 @@ function mapVideo(row: DbVideoRow): VideoRecord {
   const rawSubs = (row as { subtitles?: unknown }).subtitles;
   return {
     ...row,
+    media_type: ((row as { media_type?: string }).media_type === "tv" ? "tv" : "movie") as "movie" | "tv",
     qualities: typeof row.qualities === "string" ? JSON.parse(row.qualities) : row.qualities,
     subtitles: Array.isArray(rawSubs)
       ? (rawSubs as VideoRecord["subtitles"])
@@ -237,6 +249,18 @@ function ensureSchema(): Promise<void> {
       )`;
       // Subtitles stored per video: [{lang, label, file}]
       await getSql()`ALTER TABLE videos ADD COLUMN IF NOT EXISTS subtitles JSONB DEFAULT '[]'::jsonb`;
+      await getSql()`ALTER TABLE videos ADD COLUMN IF NOT EXISTS media_type TEXT DEFAULT 'movie'`;
+      await getSql()`CREATE TABLE IF NOT EXISTS episodes (
+        id SERIAL PRIMARY KEY,
+        video_id INTEGER NOT NULL REFERENCES videos(id) ON DELETE CASCADE,
+        season INTEGER NOT NULL,
+        episode INTEGER NOT NULL,
+        name TEXT,
+        file TEXT NOT NULL,
+        qualities JSONB DEFAULT '[]'::jsonb,
+        created_at TIMESTAMPTZ DEFAULT now(),
+        UNIQUE(video_id, season, episode)
+      )`;
     })();
   }
   return schemaPromise;
@@ -759,5 +783,49 @@ export async function addSubtitle(videoId: number, lang: string, label: string, 
   const subs = current.filter((s) => s.lang !== lang);
   subs.push({ lang, label, file });
   await getSql()`UPDATE videos SET subtitles = ${getSql().json(subs)}::jsonb, updated_at = now() WHERE id = ${videoId}`;
+}
+
+// ===== Episodes (TV series) =====
+
+export async function upsertEpisode(
+  videoId: number,
+  season: number,
+  episode: number,
+  file: string,
+  quality: string
+): Promise<number> {
+  await ensureSchema();
+  const rows = await getSql()<{ id: number }[]>`
+    INSERT INTO episodes (video_id, season, episode, name, file, qualities)
+    VALUES (${videoId}, ${season}, ${episode}, ${"Episode " + episode}, ${file}, ${getSql().json([{ quality, file }])}::jsonb)
+    ON CONFLICT (video_id, season, episode) DO UPDATE SET
+      file = EXCLUDED.file,
+      qualities = EXCLUDED.qualities
+    RETURNING id
+  `;
+  return rows[0].id;
+}
+
+export async function getEpisodesForSeries(videoId: number): Promise<EpisodeRecord[]> {
+  await ensureSchema();
+  const rows = await getSql()<{ id: number; video_id: number; season: number; episode: number; name: string | null; file: string; qualities: { quality: string; file: string }[] | string }[]>`
+    SELECT id, video_id, season, episode, name, file, qualities FROM episodes
+    WHERE video_id = ${videoId}
+    ORDER BY season ASC, episode ASC
+  `;
+  return rows.map((r) => ({
+    ...r,
+    qualities: typeof r.qualities === "string" ? JSON.parse(r.qualities) : r.qualities,
+  }));
+}
+
+export async function getEpisodeById(episodeId: number): Promise<EpisodeRecord | null> {
+  await ensureSchema();
+  const rows = await getSql()<{ id: number; video_id: number; season: number; episode: number; name: string | null; file: string; qualities: { quality: string; file: string }[] | string }[]>`
+    SELECT id, video_id, season, episode, name, file, qualities FROM episodes WHERE id = ${episodeId}
+  `;
+  const r = rows[0];
+  if (!r) return null;
+  return { ...r, qualities: typeof r.qualities === "string" ? JSON.parse(r.qualities) : r.qualities };
 }
 

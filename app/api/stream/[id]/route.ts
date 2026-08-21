@@ -1,18 +1,11 @@
 import { NextResponse } from "next/server";
 import { getVideoByTmdbId } from "@/lib/videos";
-import { getObjectStream, isR2Configured } from "@/lib/r2";
+import { getEpisodeById } from "@/lib/db";
+import { isR2Configured, getPresignedStreamUrl } from "@/lib/r2";
 import { safeEqual } from "@/lib/crypto";
 import crypto from "crypto";
 
 const STREAM_SECRET = process.env.STREAM_SECRET || "default-secret-change-me";
-
-const MIME_TYPES: Record<string, string> = {
-  ".mp4": "video/mp4",
-  ".webm": "video/webm",
-  ".mkv": "video/x-matroska",
-  ".avi": "video/x-msvideo",
-  ".mov": "video/quicktime",
-};
 
 function verifyToken(token: string | null): boolean {
   if (!token) return false;
@@ -49,36 +42,39 @@ export async function GET(
     }
 
     const requestedFile = new URL(request.url).searchParams.get("file");
-    const video = await getVideoByTmdbId(movieId);
-    if (!video) {
-      return NextResponse.json({ success: false, error: "Movie not available" }, { status: 404 });
+    const epParam = new URL(request.url).searchParams.get("ep");
+
+    // Episode streaming (TV)
+    let fileName: string;
+    if (epParam) {
+      const episodeId = parseInt(epParam, 10);
+      if (!episodeId) {
+        return NextResponse.json({ success: false, error: "Invalid episode id" }, { status: 400 });
+      }
+      const episode = await getEpisodeById(episodeId);
+      if (!episode) {
+        return NextResponse.json({ success: false, error: "Episode not found" }, { status: 404 });
+      }
+      fileName = requestedFile && episode.qualities.some((q) => q.file === requestedFile)
+        ? requestedFile
+        : episode.file;
+    } else {
+      const video = await getVideoByTmdbId(movieId);
+      if (!video) {
+        return NextResponse.json({ success: false, error: "Movie not available" }, { status: 404 });
+      }
+      fileName = video.file;
+      if (requestedFile) {
+        const isValid = video.qualities.some((q) => q.file === requestedFile);
+        if (isValid) fileName = requestedFile;
+      }
     }
 
-    let fileName = video.file;
-    if (requestedFile) {
-      const isValid = video.qualities.some((q) => q.file === requestedFile);
-      if (isValid) fileName = requestedFile;
-    }
-
-    // Range request passthrough — R2/S3 handles partial content natively
-    const range = request.headers.get("range") ?? undefined;
-    const obj = await getObjectStream(fileName, range);
-    if (!obj || !obj.body) {
-      return NextResponse.json({ success: false, error: "File not found in storage" }, { status: 404 });
-    }
-
-    const ext = "." + fileName.split(".").pop()?.toLowerCase();
-    const contentType = MIME_TYPES[ext] || "video/mp4";
-
-    const headers: Record<string, string> = {
-      "Content-Type": contentType,
-      "Accept-Ranges": "bytes",
-      "Cache-Control": "private, max-age=3600",
-    };
-    if (obj.contentLength !== undefined) headers["Content-Length"] = String(obj.contentLength);
-    if (obj.contentRange) headers["Content-Range"] = obj.contentRange;
-
-    return new Response(obj.body, { status: obj.status, headers });
+    // 302 → short-lived signed R2 URL. Video bytes flow viewer↔Cloudflare
+    // directly: no server bandwidth, scales to any audience. Range requests
+    // (seeking) are honored by R2 natively; the URL self-expires in 15 min.
+    const downloadUrl = await getPresignedStreamUrl(fileName);
+    return NextResponse.redirect(downloadUrl, 302);
   } catch (err) {
     console.error("[Stream] Error:", err);
     return NextResponse.json({ success: false, error: "Stream failed" }, { status: 500 });
