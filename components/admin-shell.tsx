@@ -11,6 +11,7 @@ import {
   Settings,
   Star,
   History,
+  UploadCloud,
   Menu,
   X,
   Clapperboard,
@@ -19,6 +20,7 @@ import {
 
 const NAV_ITEMS = [
   { href: "/admin/dashboard", label: "Dashboard", icon: LayoutDashboard },
+  { href: "/admin/uploads", label: "Uploads", icon: UploadCloud },
   { href: "/admin/videos", label: "Videos", icon: Film },
   { href: "/admin/scan", label: "Scanner", icon: Search },
   { href: "/admin/link", label: "Link", icon: Link2 },

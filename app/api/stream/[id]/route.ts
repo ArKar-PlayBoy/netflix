@@ -1,12 +1,18 @@
 import { NextResponse } from "next/server";
-import { readFile, stat, open } from "fs/promises";
-import { join } from "path";
 import { getVideoByTmdbId } from "@/lib/videos";
+import { getObjectStream, isR2Configured } from "@/lib/r2";
 import { safeEqual } from "@/lib/crypto";
 import crypto from "crypto";
 
-const MOVIES_DIR = join(process.cwd(), "data", "movies");
 const STREAM_SECRET = process.env.STREAM_SECRET || "default-secret-change-me";
+
+const MIME_TYPES: Record<string, string> = {
+  ".mp4": "video/mp4",
+  ".webm": "video/webm",
+  ".mkv": "video/x-matroska",
+  ".avi": "video/x-msvideo",
+  ".mov": "video/quicktime",
+};
 
 function verifyToken(token: string | null): boolean {
   if (!token) return false;
@@ -20,14 +26,6 @@ function verifyToken(token: string | null): boolean {
     return false;
   }
 }
-
-const MIME_TYPES: Record<string, string> = {
-  ".mp4": "video/mp4",
-  ".webm": "video/webm",
-  ".mkv": "video/x-matroska",
-  ".avi": "video/x-msvideo",
-  ".mov": "video/quicktime",
-};
 
 export async function GET(
   request: Request,
@@ -46,8 +44,11 @@ export async function GET(
       return NextResponse.json({ success: false, error: "Unauthorized" }, { status: 401 });
     }
 
-    const requestedFile = new URL(request.url).searchParams.get("file");
+    if (!isR2Configured()) {
+      return NextResponse.json({ success: false, error: "Storage not configured" }, { status: 500 });
+    }
 
+    const requestedFile = new URL(request.url).searchParams.get("file");
     const video = await getVideoByTmdbId(movieId);
     if (!video) {
       return NextResponse.json({ success: false, error: "Movie not available" }, { status: 404 });
@@ -56,60 +57,28 @@ export async function GET(
     let fileName = video.file;
     if (requestedFile) {
       const isValid = video.qualities.some((q) => q.file === requestedFile);
-      if (isValid) {
-        fileName = requestedFile;
-      }
+      if (isValid) fileName = requestedFile;
     }
 
-    const filePath = join(MOVIES_DIR, fileName);
-
-    let fileStat;
-    try {
-      fileStat = await stat(filePath);
-    } catch {
-      return NextResponse.json({ success: false, error: "File not found" }, { status: 404 });
+    // Range request passthrough — R2/S3 handles partial content natively
+    const range = request.headers.get("range") ?? undefined;
+    const obj = await getObjectStream(fileName, range);
+    if (!obj || !obj.body) {
+      return NextResponse.json({ success: false, error: "File not found in storage" }, { status: 404 });
     }
 
     const ext = "." + fileName.split(".").pop()?.toLowerCase();
     const contentType = MIME_TYPES[ext] || "video/mp4";
-    const fileSize = fileStat.size;
 
-    const range = request.headers.get("range");
+    const headers: Record<string, string> = {
+      "Content-Type": contentType,
+      "Accept-Ranges": "bytes",
+      "Cache-Control": "private, max-age=3600",
+    };
+    if (obj.contentLength !== undefined) headers["Content-Length"] = String(obj.contentLength);
+    if (obj.contentRange) headers["Content-Range"] = obj.contentRange;
 
-    if (range) {
-      const parts = range.replace(/bytes=/, "").split("-");
-      const start = parseInt(parts[0], 10);
-      const end = parts[1] ? parseInt(parts[1], 10) : Math.min(start + 10 * 1024 * 1024 - 1, fileSize - 1);
-      const chunkSize = end - start + 1;
-
-      const fileHandle = await open(filePath, "r");
-      const buffer = Buffer.alloc(chunkSize);
-      await fileHandle.read(buffer, 0, chunkSize, start);
-      await fileHandle.close();
-
-      return new Response(buffer, {
-        status: 206,
-        headers: {
-          "Content-Range": `bytes ${start}-${end}/${fileSize}`,
-          "Accept-Ranges": "bytes",
-          "Content-Length": chunkSize.toString(),
-          "Content-Type": contentType,
-          "Cache-Control": "private, max-age=3600",
-        },
-      });
-    }
-
-    const buffer = await readFile(filePath);
-
-    return new Response(buffer, {
-      status: 200,
-      headers: {
-        "Content-Length": fileSize.toString(),
-        "Content-Type": contentType,
-        "Accept-Ranges": "bytes",
-        "Cache-Control": "private, max-age=3600",
-      },
-    });
+    return new Response(obj.body, { status: obj.status, headers });
   } catch (err) {
     console.error("[Stream] Error:", err);
     return NextResponse.json({ success: false, error: "Stream failed" }, { status: 500 });

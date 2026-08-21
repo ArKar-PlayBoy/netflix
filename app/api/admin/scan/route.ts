@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { requireAdmin } from "@/lib/admin-auth";
-import { runScan, getScanLogs } from "@/lib/scanner";
+import { runScan } from "@/lib/scanner";
+import { getScanLogs } from "@/lib/db";
 import { logAudit, AUDIT_ACTIONS } from "@/lib/audit";
 
 export async function POST() {

@@ -1,45 +1,32 @@
 import { NextResponse } from "next/server";
 import { requireAdmin } from "@/lib/admin-auth";
-import { readdir, stat } from "fs/promises";
-import { join } from "path";
-
-async function getDirSize(dir: string): Promise<number> {
-  let totalSize = 0;
-  try {
-    const entries = await readdir(dir);
-    for (const entry of entries) {
-      const filePath = join(dir, entry);
-      const fileStat = await stat(filePath);
-      if (fileStat.isFile()) {
-        totalSize += fileStat.size;
-      } else if (fileStat.isDirectory()) {
-        totalSize += await getDirSize(filePath);
-      }
-    }
-  } catch {}
-  return totalSize;
-}
+import { listVideoFiles, isR2Configured } from "@/lib/r2";
 
 export async function GET() {
   try {
     await requireAdmin();
 
-    const videosDir = join(process.cwd(), "data", "movies");
-    const moviesSize = await getDirSize(videosDir);
+    if (!isR2Configured()) {
+      return NextResponse.json({
+        success: true,
+        data: { disk: { movieCount: 0, totalSizeBytes: 0, totalSizeGB: "0.00", storage: "not_configured" } },
+      });
+    }
 
-    let movieCount = 0;
-    try {
-      const files = await readdir(videosDir);
-      movieCount = files.filter((f) => /\.(mp4|mkv|webm|avi|mov)$/i.test(f)).length;
-    } catch {}
+    const objects = await listVideoFiles();
+    const videoFiles = objects.filter((o) =>
+      /\.(mp4|mkv|webm|avi|mov)$/i.test(o.key)
+    );
+    const totalSize = videoFiles.reduce((sum, o) => sum + o.size, 0);
 
     return NextResponse.json({
       success: true,
       data: {
         disk: {
-          movieCount,
-          totalSizeBytes: moviesSize,
-          totalSizeGB: (moviesSize / (1024 * 1024 * 1024)).toFixed(2),
+          movieCount: videoFiles.length,
+          totalSizeBytes: totalSize,
+          totalSizeGB: (totalSize / (1024 * 1024 * 1024)).toFixed(2),
+          storage: "r2",
         },
       },
     });
@@ -47,6 +34,6 @@ export async function GET() {
     if (err instanceof Error && err.message === "Unauthorized") {
       return NextResponse.json({ success: false, error: "Unauthorized" }, { status: 401 });
     }
-    return NextResponse.json({ success: false, error: "Failed to load disk info" }, { status: 500 });
+    return NextResponse.json({ success: false, error: "Failed to load storage stats" }, { status: 500 });
   }
 }

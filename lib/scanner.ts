@@ -1,9 +1,7 @@
-import { readdir } from "fs/promises";
-import { join, extname } from "path";
 import { createScanLog, updateScanLog } from "./db";
 import { upsertVideo } from "./videos";
+import { listVideoFiles, isR2Configured } from "./r2";
 
-const MOVIES_DIR = join(process.cwd(), "data", "movies");
 const TMDB_BASE = "https://api.themoviedb.org/3";
 const VIDEO_EXTENSIONS = [".mp4", ".mkv", ".webm", ".avi", ".mov"];
 
@@ -13,10 +11,15 @@ const QUALITY_KEYWORDS: Record<string, string> = {
   "hd": "1080p", "sd": "480p",
 };
 
-const QUALITY_ORDER = ["4K", "1080p", "720p", "480p", "SD"];
+const QUALITY_ORDER = ["4K", "1080p", "720p", "480p"];
 
 function cleanFilename(filename: string): string {
-  return filename.replace(/\.[^.]+$/, "").replace(/^[\d-]+\s*/, "").replace(/[-_]/g, " ").replace(/\s+/g, " ").trim();
+  return filename
+    .replace(/\.[^.]+$/, "")
+    .replace(/^[\d-]+\s*/, "")
+    .replace(/[-_]/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
 }
 
 function extractIdFromFilename(filename: string): number | null {
@@ -34,9 +37,10 @@ function detectQuality(filename: string): string {
 
 async function searchTMDB(query: string, token: string) {
   try {
-    const res = await fetch(`${TMDB_BASE}/search/movie?query=${encodeURIComponent(query)}&include_adult=false&language=en-US&page=1`, {
-      headers: { Authorization: `Bearer ${token}` },
-    });
+    const res = await fetch(
+      `${TMDB_BASE}/search/movie?query=${encodeURIComponent(query)}&include_adult=false&language=en-US&page=1`,
+      { headers: { Authorization: `Bearer ${token}` } }
+    );
     if (!res.ok) return null;
     const data = await res.json();
     return data.results?.[0] ?? null;
@@ -67,16 +71,16 @@ export type ScanResult = {
 };
 
 export async function runScan(): Promise<ScanResult> {
+  if (!isR2Configured()) throw new Error("R2 storage is not configured");
+
   const token = process.env.TMDB_TOKEN;
   if (!token) throw new Error("TMDB_TOKEN not set");
 
-  let files: string[];
-  try {
-    const entries = await readdir(MOVIES_DIR);
-    files = entries.filter((f) => VIDEO_EXTENSIONS.includes(extname(f).toLowerCase()));
-  } catch {
-    files = [];
-  }
+  // List video files from R2 cloud storage
+  const objects = await listVideoFiles();
+  const files = objects.map((o) => o.key).filter((k) =>
+    VIDEO_EXTENSIONS.includes(k.slice(k.lastIndexOf(".")).toLowerCase())
+  );
 
   const logId = await createScanLog({
     status: "running",
@@ -111,8 +115,13 @@ export async function runScan(): Promise<ScanResult> {
       try {
         const tmdbId = parseInt(tmdbIdStr);
         const details = await fetchMovieDetails(tmdbId, token);
-        const qualities = groupFiles.map((file) => ({ quality: detectQuality(file), file }))
-          .sort((a, b) => (QUALITY_ORDER.indexOf(a.quality) === -1 ? 99 : QUALITY_ORDER.indexOf(a.quality)) - (QUALITY_ORDER.indexOf(b.quality) === -1 ? 99 : QUALITY_ORDER.indexOf(b.quality)));
+        const qualities = groupFiles
+          .map((file) => ({ quality: detectQuality(file), file }))
+          .sort(
+            (a, b) =>
+              (QUALITY_ORDER.indexOf(a.quality) === -1 ? 99 : QUALITY_ORDER.indexOf(a.quality)) -
+              (QUALITY_ORDER.indexOf(b.quality) === -1 ? 99 : QUALITY_ORDER.indexOf(b.quality))
+          );
 
         await upsertVideo({
           tmdbId,
@@ -174,9 +183,4 @@ export async function runScan(): Promise<ScanResult> {
     });
     return { logId, status: "failed", filesFound: files.length, matched, unmatched, errors: [String(err)] };
   }
-}
-
-export async function getScanLogs(limit: number = 10) {
-  const { getScanLogs: dbGetLogs } = await import("./db");
-  return dbGetLogs(limit);
 }
