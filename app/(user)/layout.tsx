@@ -20,7 +20,7 @@ export default async function UserLayout({ children }: { children: React.ReactNo
           <div className="flex items-center gap-6">
             <Link href="/" className="flex items-center gap-2">
               <Clapperboard className="h-6 w-6 text-netflix" />
-              <span className="text-xl font-bold">MovieApp</span>
+              <span className="text-xl font-bold">Vionix</span>
             </Link>
             <nav className="hidden md:flex items-center gap-1">
               <Button variant="ghost" asChild>

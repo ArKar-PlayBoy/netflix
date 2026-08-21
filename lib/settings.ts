@@ -11,7 +11,7 @@ export type SettingKey =
   | "admin_password";
 
 const DEFAULTS: Record<string, string> = {
-  app_name: "MovieApp",
+  app_name: "Vionix",
   default_quality: "auto",
   network_threshold_wifi: "4k",
   network_threshold_4g: "1080p",

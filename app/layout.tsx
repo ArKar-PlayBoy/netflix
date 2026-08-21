@@ -17,8 +17,8 @@ const geistMono = Geist_Mono({
 });
 
 export const metadata: Metadata = {
-  title: "Movie App",
-  description: "Browse movies with TMDB",
+  title: "Vionix — Unlimited Movies",
+  description: "Stream movies, sync your favorites everywhere. Developed by Ar Kar Moe Myint.",
 };
 
 export default function RootLayout({
