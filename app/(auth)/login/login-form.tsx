@@ -33,7 +33,7 @@ function PosterMarquee({ posters }: { posters: string[] }) {
   if (posters.length === 0) return null;
   const doubled = [...posters, ...posters];
   return (
-    <div className="absolute inset-0 overflow-hidden pointer-events-none select-none">
+    <div className="fixed inset-0 overflow-hidden pointer-events-none select-none">
       <div
         className="absolute top-1/2 w-full"
         style={{ transform: "translateY(-50%) rotate(-6deg) scale(1.15)" }}
@@ -182,11 +182,12 @@ export default function LoginForm({
   const errorMsg = pageError || (authError ? (errorMessages[authError] ?? "Sign-in failed. Please try again.") : "");
 
   return (
-    <div className="relative min-h-screen bg-black text-white overflow-hidden flex flex-col">
+    <div className="relative min-h-dvh bg-black text-white overflow-hidden flex flex-col">
+      {/* Background stays glued to the viewport — never scrolls below content */}
       <PosterMarquee posters={posters} />
 
       {/* Top bar */}
-      <header className="relative z-10 flex items-center gap-2 px-6 md:px-12 py-6">
+      <header className="relative z-10 flex items-center gap-2 px-6 md:px-12 py-6 animate-fade-up">
         <Clapperboard className="h-7 w-7 text-netflix" />
         <span className="text-xl font-bold tracking-tight">MovieApp</span>
       </header>
@@ -195,16 +196,22 @@ export default function LoginForm({
       <main className="relative z-10 flex-1 flex items-center px-6 md:px-12 lg:px-20 py-10">
         <div className="max-w-md w-full">
           {errorMsg && (
-            <p className="mb-6 rounded-lg border border-red-500/40 bg-red-500/10 px-4 py-2.5 text-sm text-red-300">
+            <p className="mb-6 rounded-lg border border-red-500/40 bg-red-500/10 px-4 py-2.5 text-sm text-red-300 animate-fade-up">
               {errorMsg}
             </p>
           )}
 
-          <p className="text-netflix text-sm font-semibold tracking-[0.25em] uppercase mb-4">
+          <p
+            className="text-netflix text-sm font-semibold tracking-[0.25em] uppercase mb-4 animate-fade-up"
+            style={{ animationDelay: "0.05s" }}
+          >
             Unlimited movies
           </p>
 
-          <h1 className="text-4xl md:text-6xl lg:text-7xl font-black leading-[1.05] tracking-tight mb-5">
+          <h1
+            className="text-4xl sm:text-5xl md:text-6xl lg:text-7xl font-black leading-[1.05] tracking-tight mb-5 animate-fade-up"
+            style={{ animationDelay: "0.12s" }}
+          >
             Your movies.
             <br />
             <span className="text-netflix drop-shadow-[0_0_30px_rgba(229,9,20,0.35)]">
@@ -212,38 +219,43 @@ export default function LoginForm({
             </span>
           </h1>
 
-          <p className="text-white/60 text-base leading-relaxed mb-8 max-w-sm">
+          <p
+            className="text-white/60 text-base leading-relaxed mb-8 max-w-sm animate-fade-up"
+            style={{ animationDelay: "0.2s" }}
+          >
             One account. Your favorites synced across every device — phone, tablet, TV.
           </p>
 
-          <EmailForm onError={setPageError} />
+          <div className="animate-fade-up" style={{ animationDelay: "0.3s" }}>
+            <EmailForm onError={setPageError} />
 
-          <div className="flex items-center gap-3 my-5">
-            <div className="h-px flex-1 bg-white/15" />
-            <span className="text-xs text-white/40 uppercase tracking-wider">or</span>
-            <div className="h-px flex-1 bg-white/15" />
+            <div className="flex items-center gap-3 my-5">
+              <div className="h-px flex-1 bg-white/15" />
+              <span className="text-xs text-white/40 uppercase tracking-wider">or</span>
+              <div className="h-px flex-1 bg-white/15" />
+            </div>
+
+            <a
+              href="/api/auth/google"
+              className="group flex items-center justify-center gap-3 w-full py-3 rounded-xl bg-white/10 border border-white/15 font-semibold text-sm transition-all duration-200 hover:bg-white/15 active:scale-[0.99]"
+            >
+              <GoogleIcon />
+              Continue with Google
+            </a>
+
+            <p className="mt-6 text-xs text-white/35 flex items-center gap-2 flex-wrap">
+              <span>HD–4K streaming</span>
+              <span className="text-netflix">•</span>
+              <span>Synced favorites</span>
+              <span className="text-netflix">•</span>
+              <span>Free forever</span>
+            </p>
           </div>
-
-          <a
-            href="/api/auth/google"
-            className="group flex items-center justify-center gap-3 w-full py-3 rounded-xl bg-white/10 border border-white/15 font-semibold text-sm transition-all duration-200 hover:bg-white/15 active:scale-[0.99]"
-          >
-            <GoogleIcon />
-            Continue with Google
-          </a>
-
-          <p className="mt-6 text-xs text-white/35 flex items-center gap-2 flex-wrap">
-            <span>HD–4K streaming</span>
-            <span className="text-netflix">•</span>
-            <span>Synced favorites</span>
-            <span className="text-netflix">•</span>
-            <span>Free forever</span>
-          </p>
         </div>
       </main>
 
       {/* Legal */}
-      <footer className="relative z-10 px-6 md:px-12 py-6">
+      <footer className="relative z-10 px-6 md:px-12 py-6 pb-[max(1.5rem,env(safe-area-inset-bottom))] animate-fade-up" style={{ animationDelay: "0.4s" }}>
         <p className="text-xs text-white/35">
           By continuing, you agree to our Terms of Use and Privacy Policy.
         </p>
