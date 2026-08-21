@@ -43,7 +43,7 @@ export async function POST(request: Request) {
     const valid = await bcrypt.compare(password, user?.password_hash || DUMMY_HASH);
 
     if (!user || !valid) {
-      await logAudit("user.login", `Failed manual login (${ip})`);
+      await logAudit("user.login", `Failed sign-in for ${email || "unknown"} (${ip})`);
       return NextResponse.json({ success: false, error: "Invalid email or password." }, { status: 401 });
     }
 
@@ -57,7 +57,7 @@ export async function POST(request: Request) {
 
     resetRateLimit(`user-login:${ip}`);
     await createUserSession(user.id);
-    await logAudit("user.login", "Customer signed in");
+    await logAudit("user.login", `Signed in "${user.name}" <${user.email}> (${ip})`);
 
     return NextResponse.json({ success: true, data: { name: user.name } });
   } catch (err) {

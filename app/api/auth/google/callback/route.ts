@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import { GOOGLE_TOKEN_URL, GOOGLE_USERINFO_URL, getGoogleConfig, createUserSession } from "@/lib/user-auth";
 import { upsertGoogleUser } from "@/lib/db";
 import { rateLimit, getClientIp } from "@/lib/rate-limit";
+import { logAudit } from "@/lib/audit";
 
 export async function GET(request: Request) {
   const origin = new URL(request.url).origin;
@@ -65,7 +66,9 @@ export async function GET(request: Request) {
       picture: profile.picture ?? null,
     });
 
+    const ip = getClientIp(request);
     await createUserSession(user.id);
+    await logAudit("user.login", `Google sign-in "${user.name}" <${user.email}> (${ip})`);
 
     const res = NextResponse.redirect(origin);
     res.cookies.delete("oauth_state");

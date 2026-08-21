@@ -56,7 +56,7 @@ export async function POST(request: Request) {
     const user = await createEmailUser({ email, name, passwordHash });
 
     await createUserSession(user.id);
-    await logAudit("user.register", `New account registered (${ip})`);
+    await logAudit("user.register", `Registered "${user.name}" <${email}> from ${ip}`);
 
     return NextResponse.json({ success: true, data: { name: user.name } });
   } catch (err) {
