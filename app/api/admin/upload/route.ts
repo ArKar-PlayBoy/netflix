@@ -4,7 +4,8 @@ import { isR2Configured, getPresignedUploadUrl, headObject } from "@/lib/r2";
 import { logAudit } from "@/lib/audit";
 
 const ALLOWED_EXTENSIONS = [".mp4", ".mkv", ".webm", ".avi", ".mov"];
-const SAFE_KEY_RE = /^[a-zA-Z0-9._\- ]+$/;
+// Common release-name characters: dots, dashes, underscores, spaces, parens, brackets, apostrophes, etc.
+const SAFE_KEY_RE = /^[a-zA-Z0-9._\- ()[\]'+,&!]+$/;
 
 export async function POST(request: Request) {
   try {
