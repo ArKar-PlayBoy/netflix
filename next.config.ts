@@ -14,7 +14,9 @@ const securityHeaders = [
 
 const nextConfig: NextConfig = {
   images: {
-    formats: ["image/avif", "image/webp"],
+    // Serve TMDB posters directly from their CDN instead of proxying through
+    // our server — avoids upstream timeouts and saves image-optimization quota
+    unoptimized: true,
     remotePatterns: [
       {
         protocol: "https",

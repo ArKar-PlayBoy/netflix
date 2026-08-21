@@ -16,6 +16,8 @@ const sql = postgres(DATABASE_URL, {
   connect_timeout: 10,
   // Required for Neon's PgBouncer pooler (transaction mode)
   prepare: false,
+  // Suppress noisy "relation already exists" NOTICEs from CREATE TABLE IF NOT EXISTS
+  onnotice: () => {},
 });
 
 export type VideoRecord = {
