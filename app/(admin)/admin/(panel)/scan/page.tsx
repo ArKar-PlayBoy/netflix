@@ -124,7 +124,7 @@ export default function ScanPage() {
       ) : logs.length === 0 ? (
         <p className="text-muted-foreground text-sm">No scans yet.</p>
       ) : (
-        <div className="rounded-xl border overflow-hidden">
+        <div className="rounded-xl border overflow-x-auto">
           <table className="w-full text-sm">
             <thead className="bg-muted/50">
               <tr>

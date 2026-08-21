@@ -76,9 +76,9 @@ export default async function Home() {
       <MovieRow title="Now Playing" movies={data.nowPlaying} />
       <MovieRow title="Top Rated" movies={data.topRated} />
       <MovieRow title="Upcoming" movies={data.upcoming} />
-      <div className="mb-8 px-4 md:px-8">
-        <div className="flex items-center justify-between mb-4">
-          <h2 className="text-xl md:text-2xl font-bold">Popular</h2>
+      <div className="mb-8">
+        <div className="flex items-center justify-between mb-4 px-4 md:px-8">
+          <h2 className="text-lg md:text-xl font-bold">Popular</h2>
           <Button variant="ghost" size="sm" asChild>
             <Link href="/popular">
               See All
@@ -86,9 +86,9 @@ export default async function Home() {
             </Link>
           </Button>
         </div>
-        <div className="flex gap-3 overflow-hidden">
+        <div className="flex gap-2 md:gap-3 overflow-x-auto scrollbar-hide px-4 md:px-8 pb-2 snap-x snap-mandatory">
           {data.popular.slice(0, 10).map((movie) => (
-            <div key={movie.id} className="flex-none w-[140px] sm:w-[160px] md:w-[180px]">
+            <div key={movie.id} className="flex-none w-[130px] sm:w-[160px] md:w-[180px] snap-start">
               <Link href={`/view/${movie.id}`}>
                 <div className="aspect-[2/3] bg-muted rounded-lg overflow-hidden">
                   {movie.poster_path && (

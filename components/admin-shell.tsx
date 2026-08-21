@@ -10,9 +10,11 @@ import {
   Link2,
   Settings,
   Star,
+  History,
   Menu,
   X,
   Clapperboard,
+  LogOut,
 } from "lucide-react";
 
 const NAV_ITEMS = [
@@ -20,17 +22,26 @@ const NAV_ITEMS = [
   { href: "/admin/videos", label: "Videos", icon: Film },
   { href: "/admin/scan", label: "Scanner", icon: Search },
   { href: "/admin/link", label: "Link", icon: Link2 },
-  { href: "/admin/settings", label: "Settings", icon: Settings },
   { href: "/admin/featured", label: "Featured", icon: Star },
+  { href: "/admin/audit", label: "Audit Logs", icon: History },
+  { href: "/admin/settings", label: "Settings", icon: Settings },
 ];
 
-export default function AdminLayout({ children }: { children: React.ReactNode }) {
+export default function AdminShell({ children }: { children: React.ReactNode }) {
   const pathname = usePathname();
   const [sidebarOpen, setSidebarOpen] = useState(false);
+  const [loggingOut, setLoggingOut] = useState(false);
 
-  if (pathname === "/admin") {
-    return <>{children}</>;
-  }
+  const handleLogout = async () => {
+    if (loggingOut) return;
+    setLoggingOut(true);
+    try {
+      await fetch("/api/admin/logout", { method: "POST" });
+      window.location.href = "/admin/login";
+    } catch {
+      setLoggingOut(false);
+    }
+  };
 
   return (
     <div className="min-h-screen bg-background">
@@ -80,13 +91,21 @@ export default function AdminLayout({ children }: { children: React.ReactNode })
             );
           })}
         </nav>
-        <div className="absolute bottom-0 left-0 right-0 p-3 border-t">
+        <div className="absolute bottom-0 left-0 right-0 p-3 border-t space-y-1">
           <Link
             href="/"
             className="flex items-center justify-center gap-2 px-3 py-2 rounded-lg text-sm font-medium text-muted-foreground hover:bg-muted hover:text-foreground transition-colors"
           >
             ← Back to App
           </Link>
+          <button
+            onClick={handleLogout}
+            disabled={loggingOut}
+            className="w-full flex items-center justify-center gap-2 px-3 py-2 rounded-lg text-sm font-medium text-red-500 hover:bg-red-500/10 hover:text-red-600 transition-colors disabled:opacity-50"
+          >
+            <LogOut className="h-4 w-4" />
+            {loggingOut ? "Signing out..." : "Sign Out"}
+          </button>
         </div>
       </aside>
 

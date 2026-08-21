@@ -1,11 +1,13 @@
 import { NextResponse } from "next/server";
 import { requireAdmin } from "@/lib/admin-auth";
 import { runScan, getScanLogs } from "@/lib/scanner";
+import { logAudit, AUDIT_ACTIONS } from "@/lib/audit";
 
 export async function POST() {
   try {
     await requireAdmin();
     const result = await runScan();
+    await logAudit(AUDIT_ACTIONS.SCAN_RUN, `Scanned ${result.filesFound} files: ${result.matched} matched, ${result.unmatched} unmatched`);
     return NextResponse.json({ success: true, data: { result } });
   } catch (err) {
     if (err instanceof Error && err.message === "Unauthorized") {

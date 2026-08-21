@@ -13,22 +13,69 @@ export default function FavoritesPage() {
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
-    const stored = localStorage.getItem("favorites");
-    const ids: number[] = stored ? JSON.parse(stored) : [];
+    let cancelled = false;
 
-    if (ids.length === 0) {
-      setLoading(false);
-      return;
-    }
+    const loadIds = async (): Promise<number[]> => {
+      try {
+        const meRes = await fetch("/api/auth/me").then((r) => r.json());
+        const user = meRes.success ? meRes.data?.user : null;
+        if (user) {
+          const favRes = await fetch("/api/favorites").then((r) => r.json());
+          const accountIds: number[] = favRes.success ? favRes.data?.favorites ?? [] : [];
 
-    fetch(`/api/movies?ids=${ids.join(",")}`)
-      .then((res) => res.json())
-      .then((json) => {
-        const list = json.success ? json.data : json;
-        setMovies((list || []).filter(Boolean));
+          // Merge guest favorites (localStorage) into the account once
+          let localIds: number[] = [];
+          try {
+            localIds = JSON.parse(localStorage.getItem("favorites") || "[]");
+          } catch {}
+
+          const missing = localIds.filter((id) => !accountIds.includes(id));
+          if (missing.length > 0) {
+            await Promise.all(
+              missing.map((id) =>
+                fetch("/api/favorites", {
+                  method: "POST",
+                  headers: { "Content-Type": "application/json" },
+                  body: JSON.stringify({ movieId: id }),
+                }).catch(() => null)
+              )
+            );
+            localStorage.removeItem("favorites");
+            return [...accountIds, ...missing];
+          }
+
+          return accountIds;
+        }
+      } catch {}
+      try {
+        const stored = localStorage.getItem("favorites");
+        return stored ? JSON.parse(stored) : [];
+      } catch {
+        return [];
+      }
+    };
+
+    loadIds().then((ids) => {
+      if (cancelled) return;
+      if (ids.length === 0) {
         setLoading(false);
-      })
-      .catch(() => setLoading(false));
+        return;
+      }
+
+      fetch(`/api/movies?ids=${ids.join(",")}`)
+        .then((res) => res.json())
+        .then((json) => {
+          if (cancelled) return;
+          const list = json.success ? json.data : json;
+          setMovies((list || []).filter(Boolean));
+          setLoading(false);
+        })
+        .catch(() => setLoading(false));
+    });
+
+    return () => {
+      cancelled = true;
+    };
   }, []);
 
   if (loading) {
@@ -44,7 +91,7 @@ export default function FavoritesPage() {
       <div className="text-center py-20">
         <Heart className="h-12 w-12 mx-auto text-muted-foreground mb-4" />
         <h1 className="text-2xl font-bold mb-2">My Favorites</h1>
-        <p className="text-muted-foreground mb-4">No favorites yet.</p>
+        <p className="text-muted-foreground mb-2">No favorites yet.</p>
         <Link href="/" className="text-primary hover:underline">
           Browse movies
         </Link>

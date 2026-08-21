@@ -107,7 +107,7 @@ export default function VideosPage() {
         </div>
       ) : (
         <>
-          <div className="rounded-xl border overflow-hidden">
+          <div className="rounded-xl border overflow-x-auto">
             <div className="overflow-x-auto">
               <table className="w-full text-sm">
                 <thead className="bg-muted/50">

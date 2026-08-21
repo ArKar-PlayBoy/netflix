@@ -1,11 +1,18 @@
+import { redirect } from "next/navigation";
 import Link from "next/link";
 import { Clapperboard, Search, Home, Heart } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { ThemeToggle } from "@/components/theme-toggle";
 import GenreSidebar from "@/components/genre-sidebar";
 import MobileGenreFilter from "@/components/mobile-genre-filter";
+import UserMenu from "@/components/user-menu";
+import BottomNav from "@/components/bottom-nav";
+import { getCurrentUser } from "@/lib/user-auth";
 
-export default function UserLayout({ children }: { children: React.ReactNode }) {
+export default async function UserLayout({ children }: { children: React.ReactNode }) {
+  const user = await getCurrentUser();
+  if (!user) redirect("/login");
+
   return (
     <div className="min-h-screen flex flex-col">
       <header className="sticky top-0 z-50 w-full border-b bg-background/95 backdrop-blur supports-[backdrop-filter]:bg-background/60">
@@ -36,7 +43,7 @@ export default function UserLayout({ children }: { children: React.ReactNode }) 
               </Button>
             </nav>
           </div>
-          
+
           <div className="flex items-center gap-3">
             <Button variant="secondary" asChild>
               <Link href="/search">
@@ -44,6 +51,7 @@ export default function UserLayout({ children }: { children: React.ReactNode }) 
                 <span className="hidden sm:inline">Search</span>
               </Link>
             </Button>
+            <UserMenu />
             <ThemeToggle />
           </div>
         </div>
@@ -56,12 +64,14 @@ export default function UserLayout({ children }: { children: React.ReactNode }) 
             <GenreSidebar />
           </div>
         </aside>
-        
-        <main className="relative w-full">
+
+        <main className="relative w-full pb-20 md:pb-0">
           <MobileGenreFilter />
           {children}
         </main>
       </div>
+
+      <BottomNav />
     </div>
   );
 }

@@ -39,10 +39,14 @@ export default function MovieRow({
 
         <div
           ref={scrollRef}
-          className="flex gap-2 md:gap-3 overflow-x-auto scrollbar-hide px-4 md:px-8 pb-2"
+          className="flex gap-2 md:gap-3 overflow-x-auto scrollbar-hide px-4 md:px-8 pb-2 snap-x snap-mandatory scroll-pl-4"
+          style={{ WebkitOverflowScrolling: "touch" }}
         >
           {movies.map((movie) => (
-            <div key={movie.id} className="flex-none w-[140px] sm:w-[160px] md:w-[180px] lg:w-[200px]">
+            <div
+              key={movie.id}
+              className="flex-none w-[130px] sm:w-[160px] md:w-[180px] lg:w-[200px] snap-start"
+            >
               <Movie movie={movie} />
             </div>
           ))}

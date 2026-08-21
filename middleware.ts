@@ -6,12 +6,19 @@ export function middleware(request: NextRequest) {
   if (pathname.startsWith("/admin")) {
     const session = request.cookies.get("admin_session")?.value;
 
-    if (!session && pathname !== "/admin") {
-      return NextResponse.redirect(new URL("/admin", request.url));
+    // Login page: bounce authed admins straight to the panel
+    if (pathname === "/admin/login") {
+      if (session) {
+        return NextResponse.redirect(new URL("/admin/dashboard", request.url));
+      }
+      return NextResponse.next();
     }
 
-    if (session && pathname === "/admin") {
-      return NextResponse.redirect(new URL("/admin/dashboard", request.url));
+    // Everything else under /admin requires a session cookie.
+    // (Real HMAC validation happens server-side in the (panel) layout —
+    // this is just a fast UX redirect for missing cookies.)
+    if (!session) {
+      return NextResponse.redirect(new URL("/admin/login", request.url));
     }
   }
 

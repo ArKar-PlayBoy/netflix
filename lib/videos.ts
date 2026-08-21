@@ -28,6 +28,11 @@ export async function getAllVideos(page: number = 1, limit: number = 20, search?
   return dbGetAll(page, limit, search);
 }
 
+export async function getUnlinkedVideos(): Promise<VideoRecord[]> {
+  const { loadAllVideos } = await import("./db");
+  return loadAllVideos().then((videos) => videos.filter((v) => v.tmdb_id === null));
+}
+
 export async function getVideoById(id: number): Promise<VideoRecord | null> {
   return dbGetById(id);
 }

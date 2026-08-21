@@ -4,6 +4,8 @@ import SearchForm from "./search-form";
 import Pagination from "@/components/pagination";
 import Movie from "@/components/movie";
 
+const MAX_PAGES = 20;
+
 async function searchMovies(query: string, page: number = 1): Promise<{ movies: MovieType[]; totalPages: number }> {
   const res = await fetch(`https://api.themoviedb.org/3/search/movie?query=${encodeURIComponent(query)}&include_adult=false&language=en-US&page=${page}`, {
     headers: {
@@ -17,7 +19,7 @@ async function searchMovies(query: string, page: number = 1): Promise<{ movies: 
   }
 
   const data = await res.json();
-  return { movies: data.results || [], totalPages: data.total_pages };
+  return { movies: data.results || [], totalPages: Math.min(data.total_pages ?? 0, MAX_PAGES) };
 }
 
 export default async function SearchPage({

@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { requireAdmin } from "@/lib/admin-auth";
 import { getFeatured, addToFeatured, removeFromFeatured, clearFeatured } from "@/lib/featured";
+import { logAudit, AUDIT_ACTIONS } from "@/lib/audit";
 
 export async function GET() {
   try {
@@ -31,6 +32,7 @@ export async function POST(request: Request) {
     }
 
     await addToFeatured(movieId, type);
+    await logAudit(AUDIT_ACTIONS.FEATURED_ADD, `Added TMDB #${movieId} to featured`);
     return NextResponse.json({ success: true });
   } catch (err) {
     if (err instanceof Error && err.message === "Unauthorized") {
@@ -49,6 +51,7 @@ export async function DELETE(request: Request) {
 
     if (action === "clear") {
       await clearFeatured();
+      await logAudit(AUDIT_ACTIONS.FEATURED_CLEAR, "Cleared all featured items");
       return NextResponse.json({ success: true });
     }
 
@@ -58,6 +61,7 @@ export async function DELETE(request: Request) {
     }
 
     await removeFromFeatured(id);
+    await logAudit(AUDIT_ACTIONS.FEATURED_REMOVE, `Removed featured item id ${id}`);
     return NextResponse.json({ success: true });
   } catch (err) {
     if (err instanceof Error && err.message === "Unauthorized") {

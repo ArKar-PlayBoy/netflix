@@ -2,13 +2,15 @@ import Movie from "@/components/movie";
 import Pagination from "@/components/pagination";
 import { MovieType } from "@/types/global";
 
+const MAX_PAGES = 20;
+
 async function fetchGenre(id: string, page: number = 1): Promise<{ movies: MovieType[]; totalPages: number }> {
   const res = await fetch(`https://api.themoviedb.org/3/discover/movie?include_adult=false&include_video=false&language=en-US&page=${page}&sort_by=popularity.desc&with_genres=${id}`, {
     headers: { Authorization: `Bearer ${process.env.TMDB_TOKEN}` },
     next: { revalidate: 3600 },
   });
   const data = await res.json();
-  return { movies: data.results ?? [], totalPages: data.total_pages ?? 1 };
+  return { movies: data.results ?? [], totalPages: Math.min(data.total_pages ?? 1, MAX_PAGES) };
 }
 
 export default async function Genre({

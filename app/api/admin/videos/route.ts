@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { requireAdmin } from "@/lib/admin-auth";
 import { getAllVideos, deleteVideo } from "@/lib/videos";
+import { logAudit, AUDIT_ACTIONS } from "@/lib/audit";
 
 export async function GET(request: Request) {
   try {
@@ -34,6 +35,7 @@ export async function DELETE(request: Request) {
       return NextResponse.json({ success: false, error: "Video not found" }, { status: 404 });
     }
 
+    await logAudit(AUDIT_ACTIONS.VIDEO_DELETE, `Deleted "${video.file}" (id ${id})`);
     return NextResponse.json({ success: true, data: { video } });
   } catch (err) {
     if (err instanceof Error && err.message === "Unauthorized") {

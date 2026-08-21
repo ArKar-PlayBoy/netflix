@@ -1,6 +1,7 @@
 import { cookies } from "next/headers";
 import crypto from "crypto";
 import { getAdminPasswordHash, initializeAdminPassword as dbInit, verifyAdminPassword as dbVerify, hasAdminAccount as dbHasAdmin } from "./db";
+import { safeEqual } from "./crypto";
 
 const SESSION_COOKIE = "admin_session";
 const SESSION_MAX_AGE = 24 * 60 * 60;
@@ -32,7 +33,7 @@ function verifySignedToken(token: string): boolean {
     const signature = parts.pop()!;
     const payload = parts.join(":");
     const expected = crypto.createHmac("sha256", SESSION_SECRET).update(payload).digest("hex");
-    if (signature !== expected) return false;
+    if (!safeEqual(signature, expected)) return false;
     const ts = parseInt(parts[0]);
     if (Date.now() - ts > SESSION_MAX_AGE * 1000) return false;
     return true;

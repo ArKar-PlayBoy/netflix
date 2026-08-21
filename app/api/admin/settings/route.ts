@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { requireAdmin } from "@/lib/admin-auth";
 import { getAllSettings, updateSettings } from "@/lib/settings";
+import { logAudit, AUDIT_ACTIONS } from "@/lib/audit";
 
 export async function GET() {
   try {
@@ -31,6 +32,7 @@ export async function PUT(request: Request) {
     }
 
     await updateSettings(settings);
+    await logAudit(AUDIT_ACTIONS.SETTINGS_UPDATE, `Updated keys: ${Object.keys(settings).join(", ")}`);
     return NextResponse.json({ success: true });
   } catch (err) {
     if (err instanceof Error && err.message === "Unauthorized") {

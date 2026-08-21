@@ -90,7 +90,7 @@ export default function SettingsPage() {
           Save
         </button>
         {saveMsg && (
-          <span className={`text-sm ${saveMsg.includes("error") || saveMsg.includes("Error") ? "text-destructive" : "text-green-500"}`}>
+          <span className={`text-sm ${saveMsg === "Settings saved" ? "text-green-500" : "text-destructive"}`}>
             {saveMsg}
           </span>
         )}

@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import { readFile, stat, open } from "fs/promises";
 import { join } from "path";
 import { getVideoByTmdbId } from "@/lib/videos";
+import { safeEqual } from "@/lib/crypto";
 import crypto from "crypto";
 
 const MOVIES_DIR = join(process.cwd(), "data", "movies");
@@ -14,7 +15,7 @@ function verifyToken(token: string | null): boolean {
     const [expires, hash] = decoded.split(":");
     if (Date.now() > parseInt(expires)) return false;
     const expected = crypto.createHash("sha256").update(`${expires}:${STREAM_SECRET}`).digest("hex");
-    return hash === expected;
+    return safeEqual(hash, expected);
   } catch {
     return false;
   }
@@ -34,6 +35,10 @@ export async function GET(
 ) {
   try {
     const { id } = await params;
+    const movieId = parseInt(id, 10);
+    if (!movieId || movieId < 1) {
+      return NextResponse.json({ success: false, error: "Invalid movie id" }, { status: 400 });
+    }
 
     const authHeader = request.headers.get("authorization");
     const token = authHeader?.replace("Bearer ", "") ?? new URL(request.url).searchParams.get("token");
@@ -43,7 +48,7 @@ export async function GET(
 
     const requestedFile = new URL(request.url).searchParams.get("file");
 
-    const video = await getVideoByTmdbId(parseInt(id));
+    const video = await getVideoByTmdbId(movieId);
     if (!video) {
       return NextResponse.json({ success: false, error: "Movie not available" }, { status: 404 });
     }
