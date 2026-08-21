@@ -8,6 +8,9 @@ import { Button } from "@/components/ui/button";
 import Movie from "@/components/movie";
 import MoviePlayer from "@/components/movie-player";
 import FavoriteButton from "@/components/favorite-button";
+import WatchlistButton from "@/components/watchlist-button";
+import RatingStars from "@/components/rating-stars";
+import CommentsSection from "@/components/comments-section";
 
 const IMG = "https://image.tmdb.org/t/p";
 const PROVIDER_IMG = "https://image.tmdb.org/t/p/w92";
@@ -72,16 +75,21 @@ async function fetchWatchProviders(id: string): Promise<{ us: WatchProvidersResu
   return { us: data.results?.US ?? null };
 }
 
-async function getLocalVideoData(id: string): Promise<{ hasLocalVideo: boolean; qualities: { quality: string; file: string }[] }> {
+async function getLocalVideoData(id: string): Promise<{
+  hasLocalVideo: boolean;
+  qualities: { quality: string; file: string }[];
+  subtitles: { lang: string; label: string; file: string }[];
+}> {
   try {
     const video = await getVideoByTmdbId(parseInt(id));
-    if (!video) return { hasLocalVideo: false, qualities: [] };
+    if (!video) return { hasLocalVideo: false, qualities: [], subtitles: [] };
     return {
       hasLocalVideo: true,
       qualities: video.qualities.map((q) => ({ quality: q.quality, file: q.file })),
+      subtitles: video.subtitles ?? [],
     };
   } catch {
-    return { hasLocalVideo: false, qualities: [] };
+    return { hasLocalVideo: false, qualities: [], subtitles: [] };
   }
 }
 
@@ -232,15 +240,21 @@ export default async function MoviePage({ params }: { params: Promise<{ id: stri
             <p className="text-muted-foreground leading-relaxed text-base mb-6">
               {movie.overview || "No overview available."}
             </p>
-            <div className="flex flex-wrap items-center gap-3 mb-6">
+            <div className="flex flex-wrap items-center gap-3 mb-4">
               <MoviePlayer
                 movieId={movie.id}
                 title={movie.title}
                 hasLocalVideo={localVideoData.hasLocalVideo}
                 trailerKey={trailer?.key ?? null}
                 qualities={localVideoData.qualities}
+                subtitles={localVideoData.subtitles}
               />
               <FavoriteButton movieId={movie.id} />
+              <WatchlistButton movieId={movie.id} />
+            </div>
+
+            <div className="mb-6">
+              <RatingStars movieId={movie.id} />
             </div>
 
             {watchProviders.us && (
@@ -311,6 +325,11 @@ export default async function MoviePage({ params }: { params: Promise<{ id: stri
             )}
           </div>
         </div>
+      </div>
+
+      {/* Comments */}
+      <div className="max-w-7xl mx-auto px-4 md:px-8 py-10 border-t border-border">
+        <CommentsSection movieId={movie.id} />
       </div>
 
       {similar.length > 0 && (

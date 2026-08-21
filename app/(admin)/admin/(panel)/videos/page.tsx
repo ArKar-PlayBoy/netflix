@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { Search, Trash2, Loader2, Film, AlertTriangle } from "lucide-react";
+import { Search, Trash2, Loader2, Film, AlertTriangle, Subtitles as SubtitlesIcon, X } from "lucide-react";
 import { Button } from "@/components/ui/button";
 
 type Video = {
@@ -50,6 +50,73 @@ export default function VideosPage() {
     e.preventDefault();
     setPage(1);
     fetchVideos(1, search);
+  };
+
+  // Subtitle attach state
+  const [subModal, setSubModal] = useState<{ videoId: number; title: string } | null>(null);
+  const [subLang, setSubLang] = useState("mm");
+  const [subFile, setSubFile] = useState<File | null>(null);
+  const [subBusy, setSubBusy] = useState(false);
+  const [subMsg, setSubMsg] = useState("");
+
+  const openSubtitleModal = (videoId: number, title: string) => {
+    setSubModal({ videoId, title });
+    setSubLang("mm");
+    setSubFile(null);
+    setSubMsg("");
+  };
+
+  const srtToVtt = (srt: string): string => {
+    return "WEBVTT\n\n" + srt.replace(/(\d{2}:\d{2}:\d{2}),(\d{3})/g, "$1.$2");
+  };
+
+  const handleSubtitleUpload = async () => {
+    if (!subModal || !subFile) return;
+    setSubBusy(true);
+    setSubMsg("");
+    try {
+      // 1. Presign
+      const pRes = await fetch("/api/admin/subtitle", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ action: "presign", fileName: subFile.name }),
+      });
+      const pData = await pRes.json();
+      if (!pData.success) throw new Error(pData.error);
+      const { key, uploadUrl } = pData.data;
+
+      // 2. Convert SRT→VTT if needed, upload text
+      const raw = await subFile.text();
+      const vtt = subFile.name.toLowerCase().endsWith(".srt") ? srtToVtt(raw) : raw;
+      const put = await fetch(uploadUrl, {
+        method: "PUT",
+        headers: { "Content-Type": "text/vtt" },
+        body: vtt,
+      });
+      if (!put.ok) throw new Error("Failed to store subtitle");
+
+      // 3. Attach to video
+      const aRes = await fetch("/api/admin/subtitle", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          action: "attach",
+          videoId: subModal.videoId,
+          lang: subLang,
+          label: subLang === "mm" ? "မြန်မာ" : subLang.toUpperCase(),
+          key,
+        }),
+      });
+      const aData = await aRes.json();
+      if (!aData.success) throw new Error(aData.error);
+
+      setSubMsg("Subtitle attached ✓");
+      setTimeout(() => setSubModal(null), 1200);
+    } catch (err) {
+      setSubMsg(err instanceof Error ? err.message : "Failed");
+    } finally {
+      setSubBusy(false);
+    }
   };
 
   const handleDelete = async (id: number) => {
@@ -156,17 +223,26 @@ export default function VideosPage() {
                           </div>
                         </td>
                         <td className="px-4 py-3 text-right">
-                          <button
-                            onClick={() => handleDelete(video.id)}
-                            disabled={deleting === video.id}
-                            className="p-1.5 text-muted-foreground hover:text-red-500 transition-colors disabled:opacity-50"
-                          >
-                            {deleting === video.id ? (
-                              <Loader2 className="h-4 w-4 animate-spin" />
-                            ) : (
-                              <Trash2 className="h-4 w-4" />
-                            )}
-                          </button>
+                          <div className="flex items-center justify-end gap-1">
+                            <button
+                              onClick={() => openSubtitleModal(video.id, video.title)}
+                              title="Attach subtitles"
+                              className="p-1.5 text-muted-foreground hover:text-netflix transition-colors"
+                            >
+                              <SubtitlesIcon className="h-4 w-4" />
+                            </button>
+                            <button
+                              onClick={() => handleDelete(video.id)}
+                              disabled={deleting === video.id}
+                              className="p-1.5 text-muted-foreground hover:text-red-500 transition-colors disabled:opacity-50"
+                            >
+                              {deleting === video.id ? (
+                                <Loader2 className="h-4 w-4 animate-spin" />
+                              ) : (
+                                <Trash2 className="h-4 w-4" />
+                              )}
+                            </button>
+                          </div>
                         </td>
                       </tr>
                     );
@@ -198,6 +274,46 @@ export default function VideosPage() {
             </div>
           )}
         </>
+      )}
+
+      {/* Subtitle modal */}
+      {subModal && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4" onClick={() => !subBusy && setSubModal(null)}>
+          <div className="w-full max-w-md rounded-2xl border bg-card p-6 shadow-2xl" onClick={(e) => e.stopPropagation()}>
+            <div className="flex items-center justify-between mb-5">
+              <h2 className="font-bold">Attach Subtitle</h2>
+              <button onClick={() => setSubModal(null)} disabled={subBusy} className="p-1 hover:bg-muted rounded">
+                <X className="h-4 w-4" />
+              </button>
+            </div>
+            <p className="text-sm text-muted-foreground mb-4 truncate">{subModal.title}</p>
+
+            <label className="text-sm font-medium block mb-1.5">Language</label>
+            <select value={subLang} onChange={(e) => setSubLang(e.target.value)} className="w-full px-3.5 py-2.5 rounded-lg border bg-background text-sm mb-4">
+              <option value="mm">Myanmar (မြန်မာ)</option>
+              <option value="en">English</option>
+            </select>
+
+            <label className="text-sm font-medium block mb-1.5">Subtitle file (.srt or .vtt)</label>
+            <input
+              type="file"
+              accept=".srt,.vtt"
+              onChange={(e) => setSubFile(e.target.files?.[0] ?? null)}
+              className="w-full text-sm file:mr-3 file:px-3 file:py-1.5 file:rounded-lg file:border-0 file:bg-netflix/10 file:text-netflix file:text-sm file:font-medium"
+            />
+
+            {subMsg && <p className={`text-sm mt-3 ${subMsg.includes("✓") ? "text-green-500" : "text-red-500"}`}>{subMsg}</p>}
+
+            <button
+              onClick={handleSubtitleUpload}
+              disabled={!subFile || subBusy}
+              className="w-full mt-5 py-2.5 bg-netflix text-white rounded-lg text-sm font-semibold hover:bg-netflix-hover transition-colors disabled:opacity-50 flex items-center justify-center gap-2"
+            >
+              {subBusy && <Loader2 className="h-4 w-4 animate-spin" />}
+              Upload & Attach
+            </button>
+          </div>
+        </div>
       )}
     </div>
   );

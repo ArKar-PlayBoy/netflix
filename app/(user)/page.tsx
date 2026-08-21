@@ -1,6 +1,7 @@
 import Link from "next/link";
 import HeroBanner from "@/components/hero-banner";
 import MovieRow from "@/components/movie-row";
+import ContinueWatchingRow from "@/components/continue-watching";
 import { Button } from "@/components/ui/button";
 import { MovieType } from "@/types/global";
 import { ArrowRight } from "lucide-react";
@@ -72,6 +73,8 @@ export default async function Home() {
   return (
     <div>
       {featured && <HeroBanner movie={featured} />}
+
+      <ContinueWatchingRow />
 
       <MovieRow title="Now Playing" movies={data.nowPlaying} />
       <MovieRow title="Top Rated" movies={data.topRated} />

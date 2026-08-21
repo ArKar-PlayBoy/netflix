@@ -22,6 +22,7 @@ export type VideoInput = {
   voteAverage?: number;
   file: string;
   qualities: { quality: string; file: string }[];
+  subtitles?: { lang: string; label: string; file: string }[];
 };
 
 export async function getAllVideos(page: number = 1, limit: number = 20, search?: string) {
@@ -52,6 +53,7 @@ export async function createVideo(data: VideoInput): Promise<number> {
     vote_average: data.voteAverage ?? 0,
     file: data.file,
     qualities: data.qualities,
+    subtitles: data.subtitles ?? [],
   });
 }
 
@@ -84,6 +86,7 @@ export async function upsertVideo(data: VideoInput): Promise<number> {
     vote_average: data.voteAverage ?? 0,
     file: data.file,
     qualities: data.qualities,
+    subtitles: data.subtitles ?? [],
   });
 }
 

@@ -36,6 +36,7 @@ export type VideoRecord = {
   vote_average: number;
   file: string;
   qualities: { quality: string; file: string }[];
+  subtitles: { lang: string; label: string; file: string }[];
   created_at: string;
   updated_at: string;
 };
@@ -113,9 +114,15 @@ function iso(value: Date | string | null): string | null {
 }
 
 function mapVideo(row: DbVideoRow): VideoRecord {
+  const rawSubs = (row as { subtitles?: unknown }).subtitles;
   return {
     ...row,
     qualities: typeof row.qualities === "string" ? JSON.parse(row.qualities) : row.qualities,
+    subtitles: Array.isArray(rawSubs)
+      ? (rawSubs as VideoRecord["subtitles"])
+      : typeof rawSubs === "string"
+        ? JSON.parse(rawSubs as unknown as string)
+        : [],
     created_at: iso(row.created_at)!,
     updated_at: iso(row.updated_at)!,
   };
@@ -199,6 +206,37 @@ function ensureSchema(): Promise<void> {
         created_at TIMESTAMPTZ DEFAULT now(),
         UNIQUE(user_id, tmdb_id)
       )`;
+      await getSql()`CREATE TABLE IF NOT EXISTS watch_progress (
+        user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+        tmdb_id INTEGER NOT NULL,
+        position_seconds REAL NOT NULL DEFAULT 0,
+        duration_seconds REAL NOT NULL DEFAULT 0,
+        updated_at TIMESTAMPTZ DEFAULT now(),
+        UNIQUE(user_id, tmdb_id)
+      )`;
+      await getSql()`CREATE TABLE IF NOT EXISTS ratings (
+        user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+        tmdb_id INTEGER NOT NULL,
+        score INTEGER NOT NULL CHECK (score >= 1 AND score <= 10),
+        created_at TIMESTAMPTZ DEFAULT now(),
+        UNIQUE(user_id, tmdb_id)
+      )`;
+      await getSql()`CREATE TABLE IF NOT EXISTS comments (
+        id SERIAL PRIMARY KEY,
+        user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+        tmdb_id INTEGER NOT NULL,
+        body TEXT NOT NULL,
+        created_at TIMESTAMPTZ DEFAULT now()
+      )`;
+      await getSql()`CREATE INDEX IF NOT EXISTS idx_comments_tmdb ON comments(tmdb_id, created_at)`;
+      await getSql()`CREATE TABLE IF NOT EXISTS watchlist (
+        user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+        tmdb_id INTEGER NOT NULL,
+        created_at TIMESTAMPTZ DEFAULT now(),
+        UNIQUE(user_id, tmdb_id)
+      )`;
+      // Subtitles stored per video: [{lang, label, file}]
+      await getSql()`ALTER TABLE videos ADD COLUMN IF NOT EXISTS subtitles JSONB DEFAULT '[]'::jsonb`;
     })();
   }
   return schemaPromise;
@@ -587,3 +625,139 @@ export async function removeUserFavorite(userId: number, tmdbId: number): Promis
   await ensureSchema();
   await getSql()`DELETE FROM favorites WHERE user_id = ${userId} AND tmdb_id = ${tmdbId}`;
 }
+
+// ===== Phase 2: progress, ratings, comments, watchlist, subtitles =====
+
+export type WatchProgressItem = {
+  tmdb_id: number;
+  position_seconds: number;
+  duration_seconds: number;
+  updated_at: string;
+};
+
+export async function saveWatchProgress(userId: number, tmdbId: number, positionSeconds: number, durationSeconds: number): Promise<void> {
+  await ensureSchema();
+  await getSql()`
+    INSERT INTO watch_progress (user_id, tmdb_id, position_seconds, duration_seconds, updated_at)
+    VALUES (${userId}, ${tmdbId}, ${positionSeconds}, ${durationSeconds}, now())
+    ON CONFLICT (user_id, tmdb_id) DO UPDATE SET
+      position_seconds = EXCLUDED.position_seconds,
+      duration_seconds = EXCLUDED.duration_seconds,
+      updated_at = now()
+  `;
+}
+
+export async function getWatchProgress(userId: number, tmdbId: number): Promise<WatchProgressItem | null> {
+  await ensureSchema();
+  const rows = await getSql()<{ position_seconds: number; duration_seconds: number; updated_at: Date }[]>`
+    SELECT position_seconds, duration_seconds, updated_at FROM watch_progress WHERE user_id = ${userId} AND tmdb_id = ${tmdbId}
+  `;
+  const r = rows[0];
+  return r ? { tmdb_id: tmdbId, position_seconds: r.position_seconds, duration_seconds: r.duration_seconds, updated_at: iso(r.updated_at)! } : null;
+}
+
+export async function getContinueWatching(userId: number, limit: number = 12): Promise<WatchProgressItem[]> {
+  await ensureSchema();
+  const rows = await getSql()<{ tmdb_id: number; position_seconds: number; duration_seconds: number; updated_at: Date }[]>`
+    SELECT tmdb_id, position_seconds, duration_seconds, updated_at
+    FROM watch_progress
+    WHERE user_id = ${userId}
+      AND duration_seconds > 0
+      AND position_seconds < duration_seconds * 0.95
+    ORDER BY updated_at DESC
+    LIMIT ${limit}
+  `;
+  return rows.map((r) => ({ ...r, updated_at: iso(r.updated_at)! }));
+}
+
+export async function deleteWatchProgress(userId: number, tmdbId: number): Promise<void> {
+  await ensureSchema();
+  await getSql()`DELETE FROM watch_progress WHERE user_id = ${userId} AND tmdb_id = ${tmdbId}`;
+}
+
+export async function setRating(userId: number, tmdbId: number, score: number): Promise<void> {
+  await ensureSchema();
+  await getSql()`
+    INSERT INTO ratings (user_id, tmdb_id, score) VALUES (${userId}, ${tmdbId}, ${score})
+    ON CONFLICT (user_id, tmdb_id) DO UPDATE SET score = EXCLUDED.score, created_at = now()
+  `;
+}
+
+export async function getMyRating(userId: number, tmdbId: number): Promise<number | null> {
+  await ensureSchema();
+  const rows = await getSql()`SELECT score FROM ratings WHERE user_id = ${userId} AND tmdb_id = ${tmdbId}`;
+  return rows[0]?.score ?? null;
+}
+
+export type CommentRecord = {
+  id: number;
+  tmdb_id: number;
+  body: string;
+  created_at: string;
+  user_name: string;
+  user_picture: string | null;
+  user_id: number;
+};
+
+export async function getComments(tmdbId: number, limit: number = 50): Promise<CommentRecord[]> {
+  await ensureSchema();
+  const rows = await getSql()<{ id: number; tmdb_id: number; body: string; created_at: Date; user_name: string; user_picture: string | null; user_id: number }[]>`
+    SELECT c.id, c.tmdb_id, c.body, c.created_at, u.name AS user_name, u.picture AS user_picture, u.id AS user_id
+    FROM comments c JOIN users u ON u.id = c.user_id
+    WHERE c.tmdb_id = ${tmdbId}
+    ORDER BY c.created_at DESC
+    LIMIT ${limit}
+  `;
+  return rows.map((r) => ({ ...r, created_at: iso(r.created_at)! }));
+}
+
+export async function addComment(userId: number, tmdbId: number, body: string): Promise<number> {
+  await ensureSchema();
+  const rows = await getSql()`
+    INSERT INTO comments (user_id, tmdb_id, body) VALUES (${userId}, ${tmdbId}, ${body})
+    RETURNING id
+  `;
+  return rows[0].id;
+}
+
+export async function deleteComment(id: number, userId: number): Promise<boolean> {
+  await ensureSchema();
+  const rows = await getSql()`DELETE FROM comments WHERE id = ${id} AND user_id = ${userId} RETURNING id`;
+  return rows.length > 0;
+}
+
+export async function toggleWatchlist(userId: number, tmdbId: number): Promise<{ inList: boolean }> {
+  await ensureSchema();
+  const existing = await getSql()`SELECT 1 AS x FROM watchlist WHERE user_id = ${userId} AND tmdb_id = ${tmdbId}`;
+  if (existing.length > 0) {
+    await getSql()`DELETE FROM watchlist WHERE user_id = ${userId} AND tmdb_id = ${tmdbId}`;
+    return { inList: false };
+  }
+  await getSql()`INSERT INTO watchlist (user_id, tmdb_id) VALUES (${userId}, ${tmdbId}) ON CONFLICT DO NOTHING`;
+  return { inList: true };
+}
+
+export async function isInWatchlist(userId: number, tmdbId: number): Promise<boolean> {
+  await ensureSchema();
+  const rows = await getSql()`SELECT 1 AS x FROM watchlist WHERE user_id = ${userId} AND tmdb_id = ${tmdbId}`;
+  return rows.length > 0;
+}
+
+export async function getWatchlistIds(userId: number): Promise<number[]> {
+  await ensureSchema();
+  const rows = await getSql()`SELECT tmdb_id FROM watchlist WHERE user_id = ${userId} ORDER BY created_at DESC`;
+  return rows.map((r) => r.tmdb_id);
+}
+
+export async function addSubtitle(videoId: number, lang: string, label: string, file: string): Promise<void> {
+  await ensureSchema();
+  const rows = await getSql()<DbVideoRow[]>`SELECT subtitles FROM videos WHERE id = ${videoId}`;
+  if (!rows[0]) throw new Error("Video not found");
+  const current: VideoRecord["subtitles"] = Array.isArray(rows[0].subtitles)
+    ? rows[0].subtitles
+    : JSON.parse((rows[0].subtitles as unknown as string) || "[]");
+  const subs = current.filter((s) => s.lang !== lang);
+  subs.push({ lang, label, file });
+  await getSql()`UPDATE videos SET subtitles = ${getSql().json(subs)}::jsonb, updated_at = now() WHERE id = ${videoId}`;
+}
+

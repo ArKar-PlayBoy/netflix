@@ -1,11 +1,17 @@
 "use client";
 
 import { useState, useCallback, useEffect, useRef } from "react";
-import { Play, X, Loader2, AlertCircle, Check, Wifi } from "lucide-react";
+import { Play, X, Loader2, AlertCircle, Check, Wifi, Subtitles } from "lucide-react";
 import { getRecommendedQuality } from "@/lib/network";
 
 type QualityOption = {
   quality: string;
+  file: string;
+};
+
+type SubtitleOption = {
+  lang: string;
+  label: string;
   file: string;
 };
 
@@ -15,12 +21,14 @@ export default function MoviePlayer({
   hasLocalVideo = false,
   trailerKey,
   qualities = [],
+  subtitles = [],
 }: {
   movieId: number;
   title: string;
   hasLocalVideo?: boolean;
   trailerKey?: string | null;
   qualities?: QualityOption[];
+  subtitles?: SubtitleOption[];
 }) {
   const [showModal, setShowModal] = useState(false);
   const [token, setToken] = useState<string | null>(null);
@@ -35,13 +43,49 @@ export default function MoviePlayer({
     return "auto";
   });
   const [showQualityMenu, setShowQualityMenu] = useState(false);
+  const [subtitleOn, setSubtitleOn] = useState<boolean>(() => {
+    if (typeof window !== "undefined") return localStorage.getItem("subs-enabled") !== "off";
+    return true;
+  });
   const videoRef = useRef<HTMLVideoElement>(null);
   const qualityMenuRef = useRef<HTMLDivElement>(null);
+  const lastSavedRef = useRef<number>(0);
+  const resumeAtRef = useRef<number | null>(null);
 
   useEffect(() => {
     const { quality } = getRecommendedQuality();
     setAutoQuality(quality);
   }, []);
+
+  // Fetch saved position once when opening
+  useEffect(() => {
+    if (!showModal || !hasLocalVideo) return;
+    let cancelled = false;
+    fetch(`/api/progress?movieId=${movieId}`)
+      .then((r) => r.json())
+      .then((d) => {
+        if (!cancelled && d.success && d.data?.progress?.position_seconds > 5) {
+          resumeAtRef.current = d.data.progress.position_seconds;
+        }
+      })
+      .catch(() => {});
+    return () => {
+      cancelled = true;
+    };
+  }, [showModal, hasLocalVideo, movieId]);
+
+  const saveProgress = useCallback(() => {
+    const v = videoRef.current;
+    if (!v || !v.duration || isNaN(v.duration)) return;
+    const now = Date.now();
+    if (now - lastSavedRef.current < 5000) return; // throttle 5s
+    lastSavedRef.current = now;
+    fetch("/api/progress", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ movieId, position: v.currentTime, duration: v.duration }),
+    }).catch(() => {});
+  }, [movieId]);
 
   const getEffectiveQuality = useCallback(() => {
     if (currentQuality === "auto") return autoQuality;
@@ -60,7 +104,7 @@ export default function MoviePlayer({
       const res = await fetch("/api/stream-token");
       if (!res.ok) throw new Error("Failed to get token");
       const data = await res.json();
-      setToken(data.token);
+      setToken(data.data?.token ?? data.token);
       setTokenError(false);
     } catch {
       setTokenError(true);
@@ -78,13 +122,14 @@ export default function MoviePlayer({
   }, [hasLocalVideo, token, fetchToken]);
 
   const closeModal = useCallback(() => {
+    saveProgress();
     setShowModal(false);
     document.body.style.overflow = "";
     setShowQualityMenu(false);
     if (videoRef.current) {
       videoRef.current.pause();
     }
-  }, []);
+  }, [saveProgress]);
 
   useEffect(() => {
     return () => {
@@ -144,10 +189,10 @@ export default function MoviePlayer({
     <>
       <button
         onClick={openModal}
-        className="inline-flex items-center gap-2 px-6 py-3 bg-netflix hover:bg-netflix-hover text-white rounded-lg font-semibold transition-colors text-lg"
+        className="group inline-flex items-center gap-2.5 px-7 py-3 bg-netflix hover:bg-netflix-hover text-white rounded-xl font-semibold transition-all duration-200 text-base shadow-lg shadow-netflix/25 hover:shadow-netflix/40 active:scale-[0.98]"
       >
-        <Play className="h-5 w-5 fill-current" />
-        {hasLocalVideo ? "Watch Movie" : "Watch Trailer"}
+        <Play className="h-5 w-5 fill-current group-hover:scale-110 transition-transform" />
+        {hasLocalVideo ? "Watch Now" : "Watch Trailer"}
       </button>
 
       {showModal && (
@@ -170,7 +215,7 @@ export default function MoviePlayer({
               </button>
             </div>
 
-            {/* Quality selector - top left badge */}
+            {/* Quality selector */}
             {hasLocalVideo && hasMultipleQualities && (
               <div className="absolute top-12 left-4 z-30" ref={qualityMenuRef}>
                 <button
@@ -192,9 +237,7 @@ export default function MoviePlayer({
                         <Wifi className="h-3 w-3" />
                         Auto ({autoQuality.toUpperCase()})
                       </span>
-                      {currentQuality === "auto" && (
-                        <Check className="h-3 w-3 text-green-400" />
-                      )}
+                      {currentQuality === "auto" && <Check className="h-3 w-3 text-green-400" />}
                     </button>
                     {qualities.map((q) => (
                       <button
@@ -203,9 +246,7 @@ export default function MoviePlayer({
                         className="w-full flex items-center justify-between px-3 py-2 text-sm text-white hover:bg-white/10 transition"
                       >
                         <span>{q.quality}</span>
-                        {currentQuality === q.quality && (
-                          <Check className="h-3 w-3 text-green-400" />
-                        )}
+                        {currentQuality === q.quality && <Check className="h-3 w-3 text-green-400" />}
                       </button>
                     ))}
                   </div>
@@ -213,12 +254,44 @@ export default function MoviePlayer({
               </div>
             )}
 
-            {/* Single quality badge (no dropdown) */}
+            {/* Single quality badge */}
             {hasLocalVideo && !hasMultipleQualities && (
               <div className="absolute top-12 left-4 z-20">
                 <span className="px-3 py-1.5 bg-black/60 text-white text-xs font-bold rounded backdrop-blur-sm border border-white/10">
                   {effectiveQuality.toUpperCase()}
                 </span>
+              </div>
+            )}
+
+            {/* Subtitle toggle */}
+            {hasLocalVideo && subtitles.length > 0 && (
+              <div className="absolute top-12 right-4 z-30">
+                <button
+                  onClick={() => {
+                    const next = !subtitleOn;
+                    setSubtitleOn(next);
+                    localStorage.setItem("subs-enabled", next ? "on" : "off");
+                    const v = videoRef.current;
+                    if (v) {
+                      for (const t of v.textTracks) {
+                        t.mode = next && t.language === "mm" ? "showing" : "hidden";
+                      }
+                      if (!next) for (const t of v.textTracks) t.mode = "hidden";
+                      else {
+                        const mm = Array.from(v.textTracks).find((t) => t.language === "mm");
+                        if (mm) mm.mode = "showing";
+                      }
+                    }
+                  }}
+                  className={`px-3 py-1.5 text-xs font-bold rounded backdrop-blur-sm transition border flex items-center gap-1.5 ${
+                    subtitleOn
+                      ? "bg-netflix/80 border-netflix text-white"
+                      : "bg-black/60 border-white/10 text-white/60 hover:text-white"
+                  }`}
+                >
+                  <Subtitles className="h-3 w-3" />
+                  CC
+                </button>
               </div>
             )}
 
@@ -247,7 +320,7 @@ export default function MoviePlayer({
               </div>
             )}
 
-            {/* HTML5 Video for local files */}
+            {/* HTML5 Video */}
             {hasLocalVideo && streamUrl && !tokenError && (
               <video
                 ref={videoRef}
@@ -258,12 +331,31 @@ export default function MoviePlayer({
                 className="w-full h-full"
                 onWaiting={() => setLoading(true)}
                 onCanPlay={() => setLoading(false)}
+                onLoadedMetadata={(e) => {
+                  // Resume from saved position
+                  if (resumeAtRef.current && resumeAtRef.current > 5) {
+                    e.currentTarget.currentTime = resumeAtRef.current;
+                    resumeAtRef.current = null;
+                  }
+                }}
+                onTimeUpdate={saveProgress}
+                onPause={saveProgress}
               >
+                {subtitles.map((sub) => (
+                  <track
+                    key={sub.lang}
+                    kind="subtitles"
+                    src={`/api/subtitle/${movieId}?token=${token}&file=${encodeURIComponent(sub.file)}`}
+                    srcLang={sub.lang}
+                    label={sub.label}
+                    default={sub.lang === "mm" && subtitleOn}
+                  />
+                ))}
                 Your browser does not support video playback.
               </video>
             )}
 
-            {/* YouTube fallback when no local video */}
+            {/* YouTube fallback */}
             {!hasLocalVideo && youtubeUrl && (
               <iframe
                 src={youtubeUrl}
@@ -278,9 +370,7 @@ export default function MoviePlayer({
             {!hasLocalVideo && !youtubeUrl && !loading && (
               <div className="absolute inset-0 flex flex-col items-center justify-center bg-black z-10 gap-4 px-6">
                 <AlertCircle className="h-12 w-12 text-muted-foreground" />
-                <p className="text-white/70 text-sm text-center">
-                  No video available for this movie.
-                </p>
+                <p className="text-white/70 text-sm text-center">No video available for this movie.</p>
                 <a
                   href={`https://www.youtube.com/results?search_query=${encodeURIComponent(title + " full movie")}`}
                   target="_blank"
