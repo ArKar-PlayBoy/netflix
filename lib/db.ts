@@ -2,23 +2,28 @@ import postgres from "postgres";
 import bcrypt from "bcryptjs";
 import { hmacHash, encrypt, decrypt, safeEqual } from "./crypto";
 
-const DATABASE_URL = process.env.DATABASE_URL;
-if (!DATABASE_URL) {
-  throw new Error("DATABASE_URL is not set. Create a Neon/Vercel Postgres database and add it to .env");
-}
+let _sql: ReturnType<typeof postgres> | null = null;
 
-const sql = postgres(DATABASE_URL, {
-  ssl: "require",
-  max: 5,
-  // Keep connections alive longer so active periods don't pay repeated
-  // TCP+TLS handshake costs (big win when DB is far away)
-  idle_timeout: 300,
-  connect_timeout: 10,
-  // Required for Neon's PgBouncer pooler (transaction mode)
-  prepare: false,
-  // Suppress noisy "relation already exists" NOTICEs from CREATE TABLE IF NOT EXISTS
-  onnotice: () => {},
-});
+function getSql() {
+  if (_sql) return _sql;
+  const url = process.env.DATABASE_URL;
+  if (!url) {
+    throw new Error("DATABASE_URL is not set. Add it to .env (local) or Vercel Environment Variables (production).");
+  }
+  _sql = postgres(url, {
+    ssl: "require",
+    max: 5,
+    // Keep connections alive longer so active periods don't pay repeated
+    // TCP+TLS handshake costs (big win when DB is far away)
+    idle_timeout: 300,
+    connect_timeout: 10,
+    // Required for Neon's PgBouncer pooler (transaction mode)
+    prepare: false,
+    // Suppress noisy "relation already exists" NOTICEs from CREATE TABLE IF NOT EXISTS
+    onnotice: () => {},
+  });
+  return _sql;
+}
 
 export type VideoRecord = {
   id: number;
@@ -134,7 +139,7 @@ let schemaPromise: Promise<void> | null = null;
 function ensureSchema(): Promise<void> {
   if (!schemaPromise) {
     schemaPromise = (async () => {
-      await sql`CREATE TABLE IF NOT EXISTS videos (
+      await getSql()`CREATE TABLE IF NOT EXISTS videos (
         id SERIAL PRIMARY KEY,
         tmdb_id INTEGER UNIQUE,
         title TEXT NOT NULL,
@@ -148,13 +153,13 @@ function ensureSchema(): Promise<void> {
         created_at TIMESTAMPTZ DEFAULT now(),
         updated_at TIMESTAMPTZ DEFAULT now()
       )`;
-      await sql`CREATE INDEX IF NOT EXISTS idx_videos_tmdb_id ON videos(tmdb_id)`;
-      await sql`CREATE TABLE IF NOT EXISTS settings (
+      await getSql()`CREATE INDEX IF NOT EXISTS idx_videos_tmdb_id ON videos(tmdb_id)`;
+      await getSql()`CREATE TABLE IF NOT EXISTS settings (
         key TEXT PRIMARY KEY,
         value TEXT NOT NULL,
         updated_at TIMESTAMPTZ DEFAULT now()
       )`;
-      await sql`CREATE TABLE IF NOT EXISTS scan_logs (
+      await getSql()`CREATE TABLE IF NOT EXISTS scan_logs (
         id SERIAL PRIMARY KEY,
         status TEXT NOT NULL DEFAULT 'running',
         files_found INTEGER DEFAULT 0,
@@ -164,20 +169,20 @@ function ensureSchema(): Promise<void> {
         started_at TIMESTAMPTZ DEFAULT now(),
         completed_at TIMESTAMPTZ
       )`;
-      await sql`CREATE TABLE IF NOT EXISTS featured (
+      await getSql()`CREATE TABLE IF NOT EXISTS featured (
         id SERIAL PRIMARY KEY,
         movie_id INTEGER NOT NULL,
         position INTEGER NOT NULL,
         type TEXT DEFAULT 'hero',
         created_at TIMESTAMPTZ DEFAULT now()
       )`;
-      await sql`CREATE TABLE IF NOT EXISTS audit_logs (
+      await getSql()`CREATE TABLE IF NOT EXISTS audit_logs (
         id SERIAL PRIMARY KEY,
         action TEXT NOT NULL,
         detail TEXT DEFAULT '',
         created_at TIMESTAMPTZ DEFAULT now()
       )`;
-      await sql`CREATE TABLE IF NOT EXISTS users (
+      await getSql()`CREATE TABLE IF NOT EXISTS users (
         id SERIAL PRIMARY KEY,
         google_id TEXT UNIQUE,
         email_hash TEXT UNIQUE NOT NULL,
@@ -187,7 +192,7 @@ function ensureSchema(): Promise<void> {
         password_hash TEXT,
         created_at TIMESTAMPTZ DEFAULT now()
       )`;
-      await sql`CREATE TABLE IF NOT EXISTS favorites (
+      await getSql()`CREATE TABLE IF NOT EXISTS favorites (
         id SERIAL PRIMARY KEY,
         user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
         tmdb_id INTEGER NOT NULL,
@@ -202,13 +207,13 @@ function ensureSchema(): Promise<void> {
 // Settings
 export async function getSetting(key: string): Promise<string | null> {
   await ensureSchema();
-  const rows = await sql<{ value: string }[]>`SELECT value FROM settings WHERE key = ${key}`;
+  const rows = await getSql()<{ value: string }[]>`SELECT value FROM settings WHERE key = ${key}`;
   return rows[0]?.value ?? null;
 }
 
 export async function getAllSettings(): Promise<Record<string, string>> {
   await ensureSchema();
-  const rows = await sql<{ key: string; value: string }[]>`
+  const rows = await getSql()<{ key: string; value: string }[]>`
     SELECT key, value FROM settings WHERE key != 'admin_password' AND key NOT LIKE 'session_%'
   `;
   const out: Record<string, string> = {};
@@ -220,7 +225,7 @@ export async function updateSettings(settings: Record<string, string>): Promise<
   await ensureSchema();
   for (const [key, value] of Object.entries(settings)) {
     if (key === "admin_password") continue;
-    await sql`
+    await getSql()`
       INSERT INTO settings (key, value, updated_at) VALUES (${key}, ${value}, now())
       ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value, updated_at = now()
     `;
@@ -238,7 +243,7 @@ export async function initializeAdminPassword(password: string): Promise<boolean
   const existing = await getAdminPasswordHash();
   if (existing) return false;
   const hash = await bcrypt.hash(password, 10);
-  await sql`
+  await getSql()`
     INSERT INTO settings (key, value, updated_at) VALUES ('admin_password', ${hash}, now())
     ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value, updated_at = now()
   `;
@@ -269,7 +274,7 @@ export async function hasAdminAccount(): Promise<boolean> {
 // Single round-trip login check: fetches hash once, handles env fallback + seeding
 export async function authenticateAdmin(password: string): Promise<{ ok: boolean; needsSetup: boolean }> {
   await ensureSchema();
-  const rows = await sql<{ value: string }[]>`SELECT value FROM settings WHERE key = 'admin_password'`;
+  const rows = await getSql()<{ value: string }[]>`SELECT value FROM settings WHERE key = 'admin_password'`;
   const storedHash = rows[0]?.value ?? null;
 
   if (!storedHash) {
@@ -291,46 +296,46 @@ export async function getAllVideos(page: number = 1, limit: number = 20, search?
   await ensureSchema();
   const offset = (page - 1) * limit;
 
-  let where = sql``;
+  let where = getSql()``;
   if (search && search.trim()) {
     const pattern = `%${search.trim()}%`;
-    where = sql`WHERE title ILIKE ${pattern} OR CAST(tmdb_id AS TEXT) LIKE ${pattern}`;
+    where = getSql()`WHERE title ILIKE ${pattern} OR CAST(tmdb_id AS TEXT) LIKE ${pattern}`;
   }
 
-  const rows = await sql<DbVideoRow[]>`
+  const rows = await getSql()<DbVideoRow[]>`
     SELECT * FROM videos ${where}
     ORDER BY updated_at DESC
     LIMIT ${limit} OFFSET ${offset}
   `;
-  const countRows = await sql<{ count: number }[]>`SELECT COUNT(*)::int AS count FROM videos ${where}`;
+  const countRows = await getSql()<{ count: number }[]>`SELECT COUNT(*)::int AS count FROM videos ${where}`;
 
   return { videos: rows.map(mapVideo), total: countRows[0]?.count ?? 0 };
 }
 
 export async function loadAllVideos(): Promise<VideoRecord[]> {
   await ensureSchema();
-  const rows = await sql<DbVideoRow[]>`SELECT * FROM videos ORDER BY updated_at DESC`;
+  const rows = await getSql()<DbVideoRow[]>`SELECT * FROM videos ORDER BY updated_at DESC`;
   return rows.map(mapVideo);
 }
 
 export async function getVideoById(id: number): Promise<VideoRecord | null> {
   await ensureSchema();
-  const rows = await sql<DbVideoRow[]>`SELECT * FROM videos WHERE id = ${id}`;
+  const rows = await getSql()<DbVideoRow[]>`SELECT * FROM videos WHERE id = ${id}`;
   return rows[0] ? mapVideo(rows[0]) : null;
 }
 
 export async function getVideoByTmdbId(tmdbId: number): Promise<VideoRecord | null> {
   await ensureSchema();
-  const rows = await sql<DbVideoRow[]>`SELECT * FROM videos WHERE tmdb_id = ${tmdbId}`;
+  const rows = await getSql()<DbVideoRow[]>`SELECT * FROM videos WHERE tmdb_id = ${tmdbId}`;
   return rows[0] ? mapVideo(rows[0]) : null;
 }
 
 export async function createVideo(data: Omit<VideoRecord, "id" | "created_at" | "updated_at">): Promise<number> {
   await ensureSchema();
-  const rows = await sql<{ id: number }[]>`
+  const rows = await getSql()<{ id: number }[]>`
     INSERT INTO videos (tmdb_id, title, year, poster_path, backdrop_path, overview, vote_average, file, qualities)
     VALUES (${data.tmdb_id}, ${data.title}, ${data.year}, ${data.poster_path}, ${data.backdrop_path},
-            ${data.overview}, ${data.vote_average}, ${data.file}, ${sql.json(data.qualities)}::jsonb)
+            ${data.overview}, ${data.vote_average}, ${data.file}, ${getSql().json(data.qualities)}::jsonb)
     RETURNING id
   `;
   return rows[0].id;
@@ -338,7 +343,7 @@ export async function createVideo(data: Omit<VideoRecord, "id" | "created_at" | 
 
 export async function updateVideo(id: number, data: Partial<VideoRecord>): Promise<void> {
   await ensureSchema();
-  await sql`
+  await getSql()`
     UPDATE videos SET
       tmdb_id = COALESCE(${data.tmdb_id ?? null}, tmdb_id),
       title = COALESCE(${data.title ?? null}, title),
@@ -348,7 +353,7 @@ export async function updateVideo(id: number, data: Partial<VideoRecord>): Promi
       overview = COALESCE(${data.overview ?? null}, overview),
       vote_average = COALESCE(${data.vote_average ?? null}, vote_average),
       file = COALESCE(${data.file ?? null}, file),
-      qualities = COALESCE(${data.qualities ? sql.json(data.qualities) : null}::jsonb, qualities),
+      qualities = COALESCE(${data.qualities ? getSql().json(data.qualities) : null}::jsonb, qualities),
       updated_at = now()
     WHERE id = ${id}
   `;
@@ -356,7 +361,7 @@ export async function updateVideo(id: number, data: Partial<VideoRecord>): Promi
 
 export async function deleteVideo(id: number): Promise<VideoRecord | null> {
   await ensureSchema();
-  const rows = await sql<DbVideoRow[]>`DELETE FROM videos WHERE id = ${id} RETURNING *`;
+  const rows = await getSql()<DbVideoRow[]>`DELETE FROM videos WHERE id = ${id} RETURNING *`;
   return rows[0] ? mapVideo(rows[0]) : null;
 }
 
@@ -364,10 +369,10 @@ export async function upsertVideo(data: Omit<VideoRecord, "id" | "created_at" | 
   await ensureSchema();
 
   if (data.tmdb_id !== null) {
-    const rows = await sql<{ id: number }[]>`
+    const rows = await getSql()<{ id: number }[]>`
       INSERT INTO videos (tmdb_id, title, year, poster_path, backdrop_path, overview, vote_average, file, qualities)
       VALUES (${data.tmdb_id}, ${data.title}, ${data.year}, ${data.poster_path}, ${data.backdrop_path},
-              ${data.overview}, ${data.vote_average}, ${data.file}, ${sql.json(data.qualities)}::jsonb)
+              ${data.overview}, ${data.vote_average}, ${data.file}, ${getSql().json(data.qualities)}::jsonb)
       ON CONFLICT (tmdb_id) DO UPDATE SET
         title = EXCLUDED.title,
         year = EXCLUDED.year,
@@ -388,7 +393,7 @@ export async function upsertVideo(data: Omit<VideoRecord, "id" | "created_at" | 
 
 export async function getVideoStats() {
   await ensureSchema();
-  const rows = await sql<{ total: number; with_tmdb: number }[]>`
+  const rows = await getSql()<{ total: number; with_tmdb: number }[]>`
     SELECT
       COUNT(*)::int AS total,
       COUNT(tmdb_id)::int AS with_tmdb
@@ -407,9 +412,9 @@ export async function getVideoStats() {
 // Scan logs
 export async function createScanLog(data: Omit<ScanLog, "id">): Promise<number> {
   await ensureSchema();
-  const rows = await sql<{ id: number }[]>`
+  const rows = await getSql()<{ id: number }[]>`
     INSERT INTO scan_logs (status, files_found, matched, unmatched, errors)
-    VALUES (${data.status}, ${data.files_found}, ${data.matched}, ${data.unmatched}, ${sql.json(data.errors)}::jsonb)
+    VALUES (${data.status}, ${data.files_found}, ${data.matched}, ${data.unmatched}, ${getSql().json(data.errors)}::jsonb)
     RETURNING id
   `;
   return rows[0].id;
@@ -417,13 +422,13 @@ export async function createScanLog(data: Omit<ScanLog, "id">): Promise<number> 
 
 export async function updateScanLog(id: number, data: Partial<ScanLog>): Promise<void> {
   await ensureSchema();
-  await sql`
+  await getSql()`
     UPDATE scan_logs SET
       status = COALESCE(${data.status ?? null}, status),
       files_found = COALESCE(${data.files_found ?? null}, files_found),
       matched = COALESCE(${data.matched ?? null}, matched),
       unmatched = COALESCE(${data.unmatched ?? null}, unmatched),
-      errors = COALESCE(${data.errors ? sql.json(data.errors) : null}::jsonb, errors),
+      errors = COALESCE(${data.errors ? getSql().json(data.errors) : null}::jsonb, errors),
       completed_at = CASE WHEN ${data.completed_at !== undefined ? true : false} THEN now() ELSE completed_at END
     WHERE id = ${id}
   `;
@@ -431,7 +436,7 @@ export async function updateScanLog(id: number, data: Partial<ScanLog>): Promise
 
 export async function getScanLogs(limit: number = 10): Promise<ScanLog[]> {
   await ensureSchema();
-  const rows = await sql<DbScanLogRow[]>`
+  const rows = await getSql()<DbScanLogRow[]>`
     SELECT * FROM scan_logs ORDER BY started_at DESC LIMIT ${limit}
   `;
   return rows.map(mapScanLog);
@@ -443,7 +448,7 @@ export async function addAuditLog(action: string, detail: string): Promise<void>
   // Cleanup only 5% of the time — saves a round-trip on most writes
   if (Math.random() < 0.05) {
     // Transaction: insert + cleanup commit together or roll back together
-    await sql.begin(async (tx) => {
+    await getSql().begin(async (tx) => {
       await tx`INSERT INTO audit_logs (action, detail) VALUES (${action}, ${detail})`;
       await tx`
         DELETE FROM audit_logs
@@ -451,18 +456,18 @@ export async function addAuditLog(action: string, detail: string): Promise<void>
       `;
     });
   } else {
-    await sql`INSERT INTO audit_logs (action, detail) VALUES (${action}, ${detail})`;
+    await getSql()`INSERT INTO audit_logs (action, detail) VALUES (${action}, ${detail})`;
   }
 }
 
 export async function getAuditLogs(page: number = 1, limit: number = 30) {
   await ensureSchema();
   const offset = (page - 1) * limit;
-  const rows = await sql<AuditLog[]>`
+  const rows = await getSql()<AuditLog[]>`
     SELECT id, action, detail, created_at FROM audit_logs
     ORDER BY id DESC LIMIT ${limit} OFFSET ${offset}
   `;
-  const countRows = await sql<{ count: number }[]>`SELECT COUNT(*)::int AS count FROM audit_logs`;
+  const countRows = await getSql()<{ count: number }[]>`SELECT COUNT(*)::int AS count FROM audit_logs`;
   return {
     logs: rows.map((r) => ({ ...r, created_at: iso(r.created_at)! })),
     total: countRows[0]?.count ?? 0,
@@ -471,13 +476,13 @@ export async function getAuditLogs(page: number = 1, limit: number = 30) {
 
 export async function clearAuditLogs(): Promise<void> {
   await ensureSchema();
-  await sql`DELETE FROM audit_logs`;
+  await getSql()`DELETE FROM audit_logs`;
 }
 
 // Featured
 export async function getFeatured(): Promise<FeaturedItem[]> {
   await ensureSchema();
-  const rows = await sql<FeaturedItem[]>`
+  const rows = await getSql()<FeaturedItem[]>`
     SELECT id, movie_id, position, type, created_at FROM featured ORDER BY position ASC
   `;
   return rows.map((r) => ({ ...r, created_at: iso(r.created_at)! }));
@@ -485,22 +490,22 @@ export async function getFeatured(): Promise<FeaturedItem[]> {
 
 export async function addToFeatured(movieId: number, type: string = "hero"): Promise<number> {
   await ensureSchema();
-  const posRows = await sql<{ pos: number }[]>`
+  const posRows = await getSql()<{ pos: number }[]>`
     SELECT COALESCE(MAX(position), 0) + 1 AS pos FROM featured WHERE type = ${type}
   `;
   const position = posRows[0]?.pos ?? 1;
-  await sql`INSERT INTO featured (movie_id, position, type) VALUES (${movieId}, ${position}, ${type})`;
+  await getSql()`INSERT INTO featured (movie_id, position, type) VALUES (${movieId}, ${position}, ${type})`;
   return position;
 }
 
 export async function removeFromFeatured(id: number): Promise<void> {
   await ensureSchema();
-  await sql`DELETE FROM featured WHERE id = ${id}`;
+  await getSql()`DELETE FROM featured WHERE id = ${id}`;
 }
 
 export async function updateFeaturedPositions(items: { id: number; position: number }[]): Promise<void> {
   await ensureSchema();
-  await sql.begin(async (tx) => {
+  await getSql().begin(async (tx) => {
     for (const { id, position } of items) {
       await tx`UPDATE featured SET position = ${position} WHERE id = ${id}`;
     }
@@ -509,7 +514,7 @@ export async function updateFeaturedPositions(items: { id: number; position: num
 
 export async function clearFeatured(): Promise<void> {
   await ensureSchema();
-  await sql`DELETE FROM featured`;
+  await getSql()`DELETE FROM featured`;
 }
 
 // Users — PII protection: google_id/email_hash HMAC-hashed, email encrypted at rest
@@ -519,25 +524,25 @@ function toPublicUser(stored: DbUserRow): UserRecord {
 
 export async function findUserByGoogleId(googleId: string): Promise<UserRecord | null> {
   await ensureSchema();
-  const rows = await sql<DbUserRow[]>`SELECT * FROM users WHERE google_id = ${hmacHash(googleId)}`;
+  const rows = await getSql()<DbUserRow[]>`SELECT * FROM users WHERE google_id = ${hmacHash(googleId)}`;
   return rows[0] ? toPublicUser(rows[0]) : null;
 }
 
 export async function findUserByEmailHash(emailHash: string): Promise<UserRecord | null> {
   await ensureSchema();
-  const rows = await sql<DbUserRow[]>`SELECT * FROM users WHERE email_hash = ${emailHash}`;
+  const rows = await getSql()<DbUserRow[]>`SELECT * FROM users WHERE email_hash = ${emailHash}`;
   return rows[0] ? toPublicUser(rows[0]) : null;
 }
 
 export async function findUserById(id: number): Promise<UserRecord | null> {
   await ensureSchema();
-  const rows = await sql<DbUserRow[]>`SELECT * FROM users WHERE id = ${id}`;
+  const rows = await getSql()<DbUserRow[]>`SELECT * FROM users WHERE id = ${id}`;
   return rows[0] ? toPublicUser(rows[0]) : null;
 }
 
 export async function createEmailUser(data: { email: string; name: string; passwordHash: string }): Promise<UserRecord> {
   await ensureSchema();
-  const rows = await sql<DbUserRow[]>`
+  const rows = await getSql()<DbUserRow[]>`
     INSERT INTO users (google_id, email_hash, email, name, picture, password_hash)
     VALUES (NULL, ${hmacHash(data.email.toLowerCase())}, ${encrypt(data.email)}, ${data.name}, NULL, ${data.passwordHash})
     RETURNING *
@@ -548,7 +553,7 @@ export async function createEmailUser(data: { email: string; name: string; passw
 export async function upsertGoogleUser(data: { google_id: string; email: string; name: string; picture: string | null }): Promise<UserRecord> {
   await ensureSchema();
   const emailLower = data.email.toLowerCase();
-  const rows = await sql<DbUserRow[]>`
+  const rows = await getSql()<DbUserRow[]>`
     INSERT INTO users (google_id, email_hash, email, name, picture, password_hash)
     VALUES (${hmacHash(data.google_id)}, ${hmacHash(emailLower)}, ${encrypt(data.email)}, ${data.name}, ${data.picture}, NULL)
     ON CONFLICT (google_id) DO UPDATE SET
@@ -564,7 +569,7 @@ export async function upsertGoogleUser(data: { google_id: string; email: string;
 // Favorites
 export async function getUserFavorites(userId: number): Promise<number[]> {
   await ensureSchema();
-  const rows = await sql<{ tmdb_id: number }[]>`
+  const rows = await getSql()<{ tmdb_id: number }[]>`
     SELECT tmdb_id FROM favorites WHERE user_id = ${userId} ORDER BY created_at ASC
   `;
   return rows.map((r) => r.tmdb_id);
@@ -572,7 +577,7 @@ export async function getUserFavorites(userId: number): Promise<number[]> {
 
 export async function addUserFavorite(userId: number, tmdbId: number): Promise<void> {
   await ensureSchema();
-  await sql`
+  await getSql()`
     INSERT INTO favorites (user_id, tmdb_id) VALUES (${userId}, ${tmdbId})
     ON CONFLICT (user_id, tmdb_id) DO NOTHING
   `;
@@ -580,5 +585,5 @@ export async function addUserFavorite(userId: number, tmdbId: number): Promise<v
 
 export async function removeUserFavorite(userId: number, tmdbId: number): Promise<void> {
   await ensureSchema();
-  await sql`DELETE FROM favorites WHERE user_id = ${userId} AND tmdb_id = ${tmdbId}`;
+  await getSql()`DELETE FROM favorites WHERE user_id = ${userId} AND tmdb_id = ${tmdbId}`;
 }
