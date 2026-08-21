@@ -78,7 +78,10 @@ export default async function Home() {
       <MovieRow title="Upcoming" movies={data.upcoming} />
       <div className="mb-8">
         <div className="flex items-center justify-between mb-4 px-4 md:px-8">
-          <h2 className="text-lg md:text-xl font-bold">Popular</h2>
+          <h2 className="flex items-center gap-2.5 text-lg md:text-xl font-bold">
+            <span className="h-5 w-1 rounded-full bg-netflix" />
+            Popular
+          </h2>
           <Button variant="ghost" size="sm" asChild>
             <Link href="/popular">
               See All

@@ -1,12 +1,13 @@
 import { redirect } from "next/navigation";
 import Link from "next/link";
-import { Clapperboard, Search, Home, Heart } from "lucide-react";
+import { Search } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { ThemeToggle } from "@/components/theme-toggle";
 import GenreSidebar from "@/components/genre-sidebar";
 import MobileGenreFilter from "@/components/mobile-genre-filter";
 import UserMenu from "@/components/user-menu";
 import BottomNav from "@/components/bottom-nav";
+import HeaderNav from "@/components/header-nav";
 import { getCurrentUser } from "@/lib/user-auth";
 
 export default async function UserLayout({ children }: { children: React.ReactNode }) {
@@ -15,44 +16,25 @@ export default async function UserLayout({ children }: { children: React.ReactNo
 
   return (
     <div className="min-h-screen flex flex-col">
-      <header className="sticky top-0 z-50 w-full border-b bg-background/95 backdrop-blur supports-[backdrop-filter]:bg-background/60">
+      <header className="sticky top-0 z-50 w-full border-b bg-background/80 backdrop-blur-xl supports-[backdrop-filter]:bg-background/60">
         <div className="container flex h-16 items-center justify-between px-4">
-          <div className="flex items-center gap-6">
-            <Link href="/" className="flex items-center gap-2">
-              <Clapperboard className="h-6 w-6 text-netflix" />
-              <span className="text-xl font-bold">Vionix</span>
+          <div className="flex items-center gap-8">
+            <Link href="/" className="flex items-center">
+              <span className="text-[22px] font-black tracking-tight leading-none">
+                vionix<span className="text-netflix">.</span>
+              </span>
             </Link>
-            <nav className="hidden md:flex items-center gap-1">
-              <Button variant="ghost" asChild>
-                <Link href="/">
-                  <Home className="h-4 w-4 mr-2" />
-                  Home
-                </Link>
-              </Button>
-              <Button variant="ghost" asChild>
-                <Link href="/search">
-                  <Search className="h-4 w-4 mr-2" />
-                  Search
-                </Link>
-              </Button>
-              <Button variant="ghost" asChild>
-                <Link href="/favorites">
-                  <Heart className="h-4 w-4 mr-2" />
-                  Favorites
-                </Link>
-              </Button>
-            </nav>
+            <HeaderNav />
           </div>
 
-          <div className="flex items-center gap-3">
-            <Button variant="secondary" asChild>
-              <Link href="/search">
-                <Search className="h-4 w-4 mr-2" />
-                <span className="hidden sm:inline">Search</span>
+          <div className="flex items-center gap-1.5 sm:gap-3">
+            <Button variant="ghost" size="icon" asChild className="md:hidden">
+              <Link href="/search" aria-label="Search">
+                <Search className="h-5 w-5" />
               </Link>
             </Button>
-            <UserMenu />
             <ThemeToggle />
+            <UserMenu />
           </div>
         </div>
       </header>
@@ -70,6 +52,19 @@ export default async function UserLayout({ children }: { children: React.ReactNo
           {children}
         </main>
       </div>
+
+      {/* Footer */}
+      <footer className="border-t py-8 pb-24 md:pb-8 text-center">
+        <p className="text-sm text-muted-foreground">
+          Developed by{" "}
+          <span className="font-semibold text-foreground border-b-2 border-netflix/60 pb-px">
+            Ar Kar Moe Myint
+          </span>
+        </p>
+        <p className="text-xs text-muted-foreground/60 mt-1.5">
+          © {new Date().getFullYear()} Vionix
+        </p>
+      </footer>
 
       <BottomNav />
     </div>

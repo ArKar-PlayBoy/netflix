@@ -27,7 +27,10 @@ export default function MovieRow({
 
   return (
     <div className="group/row relative mb-8">
-      <h2 className="text-lg md:text-xl font-bold mb-3 px-4 md:px-8">{title}</h2>
+      <h2 className="flex items-center gap-2.5 text-lg md:text-xl font-bold mb-3 px-4 md:px-8">
+        <span className="h-5 w-1 rounded-full bg-netflix" />
+        {title}
+      </h2>
 
       <div className="relative">
         <button
