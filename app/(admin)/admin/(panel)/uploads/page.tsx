@@ -12,6 +12,9 @@ type UploadItem = {
 };
 
 const ALLOWED = [".mp4", ".mkv", ".webm", ".avi", ".mov"];
+const CHUNK_SIZE = 8 * 1024 * 1024; // 8MB parts
+const MAX_RETRIES = 3;
+const CONCURRENCY = 3;
 
 export default function UploadsPage() {
   const [items, setItems] = useState<UploadItem[]>([]);
@@ -22,51 +25,132 @@ export default function UploadsPage() {
     setItems((prev) => prev.map((it) => (it.file === file ? { ...it, ...patch } : it)));
   };
 
-  const uploadOne = useCallback(async (item: UploadItem) => {
-    const { file } = item;
-    update(file, { status: "uploading", progress: 0 });
-
-    try {
-      // 1. Get presigned URL
-      const res = await fetch("/api/admin/upload", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ fileName: file.name, contentType: file.type || "video/mp4" }),
-      });
-      const data = await res.json();
-      if (!data.success) throw new Error(data.error || "Failed to get upload URL");
-      const { key, uploadUrl } = data.data as { key: string; uploadUrl: string };
-
-      // 2. PUT directly to R2 with progress
-      await new Promise<void>((resolve, reject) => {
-        const xhr = new XMLHttpRequest();
-        xhr.open("PUT", uploadUrl);
-        xhr.setRequestHeader("Content-Type", file.type || "video/mp4");
-        xhr.upload.onprogress = (e) => {
-          if (e.lengthComputable) {
-            update(file, { progress: Math.round((e.loaded / e.total) * 100) });
-          }
-        };
-        xhr.onload = () => (xhr.status >= 200 && xhr.status < 300 ? resolve() : reject(new Error(`Upload failed (${xhr.status})`)));
-        xhr.onerror = () => reject(new Error("Network error during upload"));
-        xhr.send(file);
-      });
-
-      // 3. Verify object landed
-      update(file, { status: "verifying" });
-      const vRes = await fetch("/api/admin/upload", {
-        method: "PUT",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ key }),
-      });
-      const vData = await vRes.json();
-      if (!vData.success) throw new Error(vData.error || "Verification failed");
-
-      update(file, { status: "done", progress: 100, message: `${(vData.data.size / 1024 / 1024).toFixed(1)} MB stored` });
-    } catch (err) {
-      update(file, { status: "error", message: err instanceof Error ? err.message : "Upload failed" });
+  // PUT one chunk straight to R2 with retries; returns the ETag
+  const putPart = async (
+    url: string,
+    chunk: Blob,
+    contentType: string,
+    onBytes: (sent: number) => void
+  ): Promise<string> => {
+    let lastErr: Error | null = null;
+    for (let attempt = 1; attempt <= MAX_RETRIES; attempt++) {
+      try {
+        return await new Promise<string>((resolve, reject) => {
+          const xhr = new XMLHttpRequest();
+          xhr.open("PUT", url);
+          xhr.setRequestHeader("Content-Type", contentType);
+          let lastLoaded = 0;
+          xhr.upload.onprogress = (e) => {
+            if (e.lengthComputable) onBytes(e.loaded - lastLoaded);
+            lastLoaded = e.loaded;
+          };
+          xhr.onload = () => {
+            if (xhr.status >= 200 && xhr.status < 300) {
+              const etag = xhr.getResponseHeader("ETag");
+              if (!etag) reject(new Error("Missing ETag in response"));
+              else resolve(etag);
+            } else {
+              reject(new Error(`Part failed (${xhr.status})`));
+            }
+          };
+          xhr.onerror = () => reject(new Error("Network error"));
+          xhr.send(chunk);
+        });
+      } catch (err) {
+        lastErr = err as Error;
+        if (attempt < MAX_RETRIES) await new Promise((r) => setTimeout(r, attempt * 1500));
+      }
     }
-  }, []);
+    throw lastErr ?? new Error("Part upload failed");
+  };
+
+  const uploadOne = useCallback(
+    async (item: UploadItem) => {
+      const { file } = item;
+      update(file, { status: "uploading", progress: 0 });
+      const contentType = file.type || "video/mp4";
+
+      try {
+        // 1. Create multipart session
+        const cRes = await fetch("/api/admin/upload", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ action: "create", fileName: file.name, contentType }),
+        });
+        const cData = await cRes.json();
+        if (!cData.success) throw new Error(cData.error || "Failed to start upload");
+        const { key, uploadId } = cData.data as { key: string; uploadId: string };
+
+        // 2. Upload parts (limited concurrency)
+        const totalParts = Math.max(1, Math.ceil(file.size / CHUNK_SIZE));
+        const parts: { ETag: string; PartNumber: number }[] = [];
+        let uploadedBytes = 0;
+
+        const uploadPart = async (partNumber: number): Promise<void> => {
+          const start = (partNumber - 1) * CHUNK_SIZE;
+          const chunk = file.slice(start, Math.min(start + CHUNK_SIZE, file.size));
+
+          const pRes = await fetch("/api/admin/upload", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ action: "part-url", key, uploadId, partNumber }),
+          });
+          const pData = await pRes.json();
+          if (!pData.success) throw new Error(pData.error || "Failed to sign part");
+
+          const etag = await putPart(pData.data.url, chunk, contentType, (bytes) => {
+            uploadedBytes += bytes;
+            update(file, { progress: Math.min(99, Math.round((uploadedBytes / file.size) * 100)) });
+          });
+          parts.push({ ETag: etag, PartNumber: partNumber });
+        };
+
+        let nextPart = 1;
+        const workers = Array.from({ length: Math.min(CONCURRENCY, totalParts) }, async () => {
+          while (nextPart <= totalParts) {
+            const n = nextPart++;
+            await uploadPart(n);
+          }
+        });
+        await Promise.all(workers);
+
+        // 3. Complete assembly
+        update(file, { status: "verifying" });
+        const fRes = await fetch("/api/admin/upload", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ action: "complete", key, uploadId, parts }),
+        });
+        const fData = await fRes.json();
+        if (!fData.success) throw new Error(fData.error || "Failed to assemble file");
+
+        update(file, {
+          status: "done",
+          progress: 100,
+          message: `${(fData.data.size / 1024 / 1024).toFixed(1)} MB stored`,
+        });
+      } catch (err) {
+        // Best-effort cleanup of the partial upload
+        try {
+          const cRes = await fetch("/api/admin/upload", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ action: "create", fileName: file.name, contentType }),
+          });
+          const cData = await cRes.json().catch(() => null);
+          if (cData?.success) {
+            await fetch("/api/admin/upload", {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({ action: "abort", key: file.name, uploadId: cData.data.uploadId }),
+            });
+          }
+        } catch {}
+        update(file, { status: "error", message: err instanceof Error ? err.message : "Upload failed" });
+      }
+    },
+    []
+  );
 
   const addFiles = useCallback(
     (files: FileList) => {
@@ -85,7 +169,7 @@ export default function UploadsPage() {
     <div>
       <h1 className="text-2xl font-bold mb-6">Upload Videos</h1>
       <p className="text-muted-foreground mb-6">
-        Files go straight to cloud storage. After uploading, run the{" "}
+        Large files are sent in 8MB chunks with automatic retry. After uploading, run the{" "}
         <a href="/admin/scan" className="text-netflix hover:underline">Scanner</a> to match them to TMDB.
       </p>
 
@@ -153,9 +237,9 @@ export default function UploadsPage() {
               <p className="text-xs text-muted-foreground mt-2">
                 {item.status === "waiting" && "Queued..."}
                 {item.status === "uploading" && `Uploading ${item.progress}%`}
-                {item.status === "verifying" && "Verifying in storage..."}
+                {item.status === "verifying" && "Assembling parts..."}
                 {item.status === "done" && `Stored ✓ ${item.message ?? ""}`}
-                {item.status === "error" && <span className="text-red-500">{item.message}</span>}
+                {item.status === "error" && <span className="text-red-500">{item.message} — you can re-drop the file to retry</span>}
               </p>
             </div>
           ))}

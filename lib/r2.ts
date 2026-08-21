@@ -5,6 +5,10 @@ import {
   ListObjectsV2Command,
   HeadObjectCommand,
   DeleteObjectCommand,
+  CreateMultipartUploadCommand,
+  UploadPartCommand,
+  CompleteMultipartUploadCommand,
+  AbortMultipartUploadCommand,
 } from "@aws-sdk/client-s3";
 import { getSignedUrl } from "@aws-sdk/s3-request-presigner";
 
@@ -71,6 +75,49 @@ export async function getPresignedUploadUrl(key: string, contentType: string): P
   const r2 = getR2();
   const cmd = new PutObjectCommand({ Bucket: getBucket(), Key: key, ContentType: contentType });
   return getSignedUrl(r2, cmd, { expiresIn: 3600 });
+}
+
+// Multipart upload — large files are sent in parts with per-part retry
+export async function createMultipart(key: string, contentType: string): Promise<string> {
+  const res = await getR2().send(
+    new CreateMultipartUploadCommand({ Bucket: getBucket(), Key: key, ContentType: contentType })
+  );
+  return res.UploadId!;
+}
+
+export async function getPresignedPartUrl(key: string, uploadId: string, partNumber: number): Promise<string> {
+  const cmd = new UploadPartCommand({
+    Bucket: getBucket(),
+    Key: key,
+    UploadId: uploadId,
+    PartNumber: partNumber,
+  });
+  return getSignedUrl(getR2(), cmd, { expiresIn: 6 * 3600 });
+}
+
+export async function completeMultipart(
+  key: string,
+  uploadId: string,
+  parts: { ETag: string; PartNumber: number }[]
+): Promise<void> {
+  await getR2().send(
+    new CompleteMultipartUploadCommand({
+      Bucket: getBucket(),
+      Key: key,
+      UploadId: uploadId,
+      MultipartUpload: {
+        Parts: [...parts]
+          .sort((a, b) => a.PartNumber - b.PartNumber)
+          .map((p) => ({ ETag: p.ETag, PartNumber: p.PartNumber })),
+      },
+    })
+  );
+}
+
+export async function abortMultipart(key: string, uploadId: string): Promise<void> {
+  await getR2().send(
+    new AbortMultipartUploadCommand({ Bucket: getBucket(), Key: key, UploadId: uploadId })
+  );
 }
 
 export async function headObject(key: string): Promise<{ size: number; contentType?: string } | null> {
