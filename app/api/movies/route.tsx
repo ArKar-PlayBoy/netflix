@@ -20,7 +20,10 @@ export async function GET(request: Request) {
       )
     );
 
-    return NextResponse.json({ success: true, data: movies });
+    return NextResponse.json(
+      { success: true, data: movies },
+      { headers: { "Cache-Control": "public, s-maxage=60, stale-while-revalidate=300" } }
+    );
   } catch (err) {
     console.error("[Movies API] Error:", err);
     return NextResponse.json({ success: false, error: "Failed to fetch movies" }, { status: 500 });

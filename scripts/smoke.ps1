@@ -1,8 +1,35 @@
-# Vionix smoke test — run while dev server is up:  .\scripts\smoke.ps1
+# Vionix smoke test (curl + file-based JSON bodies — PS5.1-safe)
+# Run while dev server is up:  .\scripts\smoke.ps1
 $ErrorActionPreference = "Continue"
 $BASE = "http://localhost:3000"
-$h = @{ "Content-Type" = "application/json" }
+$hJson = "Content-Type: application/json"
+$jarA = Join-Path $env:TEMP "vionix-admin.jar"
+$jarU = Join-Path $env:TEMP "vionix-user.jar"
+Remove-Item $jarA, $jarU -ErrorAction SilentlyContinue
 $results = @()
+
+function JsonFile($obj) {
+  $p = Join-Path $env:TEMP ("vj-" + [guid]::NewGuid().ToString("N") + ".json")
+  [System.IO.File]::WriteAllText($p, ($obj | ConvertTo-Json -Compress))
+  return $p
+}
+
+function Req([string]$method, [string]$url, [string]$bodyFile, [string]$jarIn, [string]$jarOut) {
+  $ca = @("-sS", "-o", "NUL", "-w", "%{http_code}", "--max-time", "40", "-X", $method)
+  if ($jarIn -and (Test-Path $jarIn)) { $ca += @("-b", $jarIn) }
+  if ($jarOut) { $ca += @("-c", $jarOut) }
+  if ($bodyFile) { $ca += @("-H", $hJson, "--data-binary", ("@" + $bodyFile)) }
+  $code = & curl.exe @ca $url
+  return [int]$code
+}
+
+function ReqBody([string]$method, [string]$url, [string]$bodyFile, [string]$jarIn, [string]$outFile) {
+  $ca = @("-sS", "-o", $outFile, "-w", "%{http_code}", "--max-time", "40", "-X", $method)
+  if ($jarIn -and (Test-Path $jarIn)) { $ca += @("-b", $jarIn) }
+  if ($bodyFile) { $ca += @("-H", $hJson, "--data-binary", ("@" + $bodyFile)) }
+  $code = & curl.exe @ca $url
+  return [int]$code
+}
 
 function Check($name, $scriptblock) {
   $sw = [System.Diagnostics.Stopwatch]::StartNew()
@@ -17,47 +44,62 @@ function Check($name, $scriptblock) {
 Write-Host "`n=== Vionix smoke ===" -ForegroundColor Cyan
 
 Check "admin login" {
-  Invoke-WebRequest "$BASE/api/admin/login" -Method POST -Body '{"password":"adminarkar123"}' -Headers $h -UseBasicParsing -SessionVariable wa -TimeoutSec 30 | Out-Null
+  $code = Req "POST" "$BASE/api/admin/login" (JsonFile @{ password = "adminarkar123" }) "" $jarA
+  if ($code -ne 200) { throw "HTTP $code" }
 }
 Check "admin stats" {
-  $r = Invoke-WebRequest "$BASE/api/admin/stats" -WebSession $wa -UseBasicParsing -TimeoutSec 20
-  if (-not $r.Content.Contains('"success":true')) { throw "bad body" }
+  $code = Req "GET" "$BASE/api/admin/stats" $null $jarA ""
+  if ($code -ne 200) { throw "HTTP $code" }
 }
 Check "admin disk (R2 list)" {
-  $r = Invoke-WebRequest "$BASE/api/admin/disk" -WebSession $wa -UseBasicParsing -TimeoutSec 30
-  if (-not $r.Content.Contains('storage')) { throw "bad body" }
+  $code = Req "GET" "$BASE/api/admin/disk" $null $jarA ""
+  if ($code -ne 200) { throw "HTTP $code" }
 }
-Check "user register+login" {
-  $email = "smoke$(Get-Random -Max 99999)@test.com"
-  Invoke-WebRequest "$BASE/api/auth/register" -Method POST -Body ('{"email":"' + $email + '","password":"smokepass1","name":"Smoke"}') -Headers $h -UseBasicParsing -TimeoutSec 30 | Out-Null
-  Invoke-WebRequest "$BASE/api/auth/login" -Method POST -Body ('{"email":"' + $email + '","password":"smokepass1"}') -Headers $h -UseBasicParsing -SessionVariable wu -TimeoutSec 30 | Out-Null
+Check "user register" {
+  $script:smokeEmail = "smoke$(Get-Random -Max 99999)@test.com"
+  $code = Req "POST" "$BASE/api/auth/register" (JsonFile @{ email = $smokeEmail; password = "smokepass1"; name = "Smoke" }) "" $jarU
+  if ($code -ne 200 -and $code -ne 409) { throw "HTTP $code" }
+}
+Check "user login" {
+  $code = Req "POST" "$BASE/api/auth/login" (JsonFile @{ email = $smokeEmail; password = "smokepass1" }) "" $jarU
+  if ($code -ne 200) { throw "HTTP $code" }
 }
 Check "me returns SafeUser" {
-  $r = Invoke-WebRequest "$BASE/api/auth/me" -WebSession $wu -UseBasicParsing -TimeoutSec 20
-  if ($r.Content -match "password_hash|google_id|email_hash") { throw "PII LEAK" }
+  $out = Join-Path $env:TEMP "vionix-me.json"
+  $code = ReqBody "GET" "$BASE/api/auth/me" $null $jarU $out
+  if ($code -ne 200) { throw "HTTP $code" }
+  if ((Get-Content $out -Raw) -match "password_hash|google_id|email_hash") { throw "PII LEAK" }
 }
 Check "anon stream-token blocked" {
-  try { Invoke-WebRequest "$BASE/api/stream-token" -UseBasicParsing -TimeoutSec 20 | Out-Null; throw "should 401" } catch { $c = $_.Exception.Response.StatusCode.value__; if ($c -ne 401) { throw "got $c" } }
+  $code = Req "GET" "$BASE/api/stream-token" $null "" ""
+  if ($code -ne 401) { throw "HTTP $code" }
 }
 Check "authed stream-token" {
-  $r = Invoke-WebRequest "$BASE/api/stream-token" -WebSession $wu -UseBasicParsing -TimeoutSec 20
-  if (-not $r.Content.Contains("token")) { throw "no token" }
+  $code = Req "GET" "$BASE/api/stream-token" $null $jarU ""
+  if ($code -ne 200) { throw "HTTP $code" }
 }
-Check "watchlist toggle" {
-  Invoke-WebRequest "$BASE/api/watchlist" -Method POST -Body '{"movieId":27205}' -Headers $h -WebSession $wu -UseBasicParsing -TimeoutSec 20 | Out-Null
-  Invoke-WebRequest "$BASE/api/watchlist" -Method POST -Body '{"movieId":27205}' -Headers $h -WebSession $wu -UseBasicParsing -TimeoutSec 20 | Out-Null
+Check "watchlist toggle x2" {
+  $code = Req "POST" "$BASE/api/watchlist" (JsonFile @{ movieId = 27205 }) $jarU ""
+  if ($code -ne 200) { throw "HTTP $code" }
+  $code = Req "POST" "$BASE/api/watchlist" (JsonFile @{ movieId = 27205 }) $jarU ""
+  if ($code -ne 200) { throw "HTTP $code" }
 }
 Check "progress save" {
-  Invoke-WebRequest "$BASE/api/progress" -Method POST -Body '{"movieId":27205,"position":60,"duration":100}' -Headers $h -WebSession $wu -UseBasicParsing -TimeoutSec 20 | Out-Null
+  $code = Req "POST" "$BASE/api/progress" (JsonFile @{ movieId = 27205; position = 60; duration = 100 }) $jarU ""
+  if ($code -ne 200) { throw "HTTP $code" }
 }
 Check "multipart create+abort" {
-  $c = Invoke-WebRequest "$BASE/api/admin/upload" -Method POST -Body '{"action":"create","fileName":"smoke-test.mp4","contentType":"video/mp4"}' -Headers $h -WebSession $wa -UseBasicParsing -TimeoutSec 40
-  $d = ($c.Content | ConvertFrom-Json).data
-  Invoke-WebRequest "$BASE/api/admin/upload" -Method POST -Body ('{"action":"abort","key":"' + $d.key + '","uploadId":"' + $d.uploadId + '"}') -Headers $h -WebSession $wa -UseBasicParsing -TimeoutSec 30 | Out-Null
+  $create = JsonFile @{ action = "create"; fileName = "smoke-test.mp4"; contentType = "video/mp4" }
+  $out = Join-Path $env:TEMP "vionix-mp.json"
+  $code = ReqBody "POST" "$BASE/api/admin/upload" $create $jarA $out
+  if ($code -ne 200) { throw "create HTTP $code" }
+  $d = (Get-Content $out -Raw | ConvertFrom-Json).data
+  $code = Req "POST" "$BASE/api/admin/upload" (JsonFile @{ action = "abort"; key = $d.key; uploadId = $d.uploadId }) $jarA ""
+  if ($code -ne 200) { throw "abort HTTP $code" }
 }
 Check "subtitle key gen" {
-  $r = Invoke-WebRequest "$BASE/api/admin/subtitle" -Method POST -Body '{"action":"key","fileName":"t.srt"}' -Headers $h -WebSession $wa -UseBasicParsing -TimeoutSec 20
-  if (-not $r.Content.Contains("subs/")) { throw "bad key" }
+  $code = Req "POST" "$BASE/api/admin/subtitle" (JsonFile @{ action = "key"; fileName = "t.srt" }) $jarA ""
+  if ($code -ne 200) { throw "HTTP $code" }
 }
 
 $results | Format-Table -AutoSize

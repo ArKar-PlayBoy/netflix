@@ -872,6 +872,13 @@ export async function bumpAdminSessionVer(): Promise<number> {
   return next;
 }
 
+/** Lightweight heartbeat used by the keep-warm cron so Neon never sleeps
+ *  (free tier suspends after ~5min idle; waking costs seconds per visitor) */
+export async function pingDb(): Promise<void> {
+  await ensureSchema();
+  await getSql()`SELECT 1`;
+}
+
 /** Every storage key already registered in the DB (videos + episodes) */
 export async function getRegisteredFileKeys(): Promise<Set<string>> {
   await ensureSchema();

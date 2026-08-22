@@ -114,6 +114,8 @@ export default function MoviePlayer({
   const lastTapRef = useRef<{ time: number; x: number } | null>(null);
   const [seekRipple, setSeekRipple] = useState<{ side: "l" | "r"; id: number } | null>(null);
   const [reloadNonce, setReloadNonce] = useState(0);
+  const [everPlayed, setEverPlayed] = useState(false);
+  const [stalling, setStalling] = useState(false);
   const [longPress2x, setLongPress2x] = useState(false);
   const longPressTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const longPressActiveRef = useRef(false);
@@ -219,6 +221,8 @@ export default function MoviePlayer({
 
   const closeModal = useCallback(() => {
     saveProgress();
+    setEverPlayed(false);
+    setStalling(false);
     setShowModal(false);
     document.body.style.overflow = "";
     setShowQualityMenu(false);
@@ -510,7 +514,14 @@ export default function MoviePlayer({
               </div>
             )}
 
-            {/* Loading — cinematic backdrop, ONLY for local video buffering.
+            {/* Mid-playback stall: subtle spinner, video frame stays visible */}
+            {stalling && !loading && (
+              <div className="absolute inset-0 z-[15] flex items-center justify-center pointer-events-none">
+                <div className="h-12 w-12 rounded-full border-2 border-white/20 border-t-netflix animate-spin" />
+              </div>
+            )}
+
+            {/* Loading — cinematic backdrop, ONLY for initial load.
                 Trailers (YouTube) load in their own iframe and never show this. */}
             {hasLocalVideo && loading && (
               <div className="absolute inset-0 z-10 flex flex-col items-center justify-center gap-4 bg-black">
@@ -573,11 +584,11 @@ export default function MoviePlayer({
                     const v = e.currentTarget;
                     if (v.buffered.length > 0) setBuffered(v.buffered.end(v.buffered.length - 1));
                   }}
-                  onPlay={() => { setIsPlaying(true); setLoading(false); showControls(); }}
+                  onPlay={() => { setIsPlaying(true); setEverPlayed(true); setStalling(false); setLoading(false); showControls(); }}
                   onPause={() => { setIsPlaying(false); saveProgress(); showControls(); }}
-                  onWaiting={() => setLoading(true)}
+                  onWaiting={() => { if (everPlayed) { setStalling(true); } else { setLoading(true); } }}
                   onPlaying={() => setLoading(false)}
-                  onCanPlay={() => setLoading(false)}
+                  onCanPlay={() => { setLoading(false); if (everPlayed) setStalling(false); }}
                   onError={() => {
                     // Stream broke (expired URL / transient reset) → show retry panel
                     setTokenError(true);

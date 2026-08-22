@@ -91,7 +91,19 @@ export async function GET(
     }
 
     const range = request.headers.get("range") ?? undefined;
-    const obj = await getObjectStream(fileName, range);
+
+    // Transient connection resets (flaky upstream networks) get ONE silent
+    // retry — without this, a single reset stalls the player indefinitely.
+    let obj: Awaited<ReturnType<typeof getObjectStream>> = null;
+    for (let attempt = 0; attempt < 2; attempt++) {
+      try {
+        obj = await getObjectStream(fileName, range);
+        break;
+      } catch (streamErr) {
+        if (attempt === 1) throw streamErr;
+        await new Promise((r) => setTimeout(r, 300));
+      }
+    }
     if (!obj || !obj.body) {
       return NextResponse.json({ success: false, error: "File not found in storage" }, { status: 404 });
     }

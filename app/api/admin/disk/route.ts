@@ -2,6 +2,9 @@ import { NextResponse } from "next/server";
 import { requireAdmin } from "@/lib/admin-auth";
 import { listVideoFiles, isR2Configured } from "@/lib/r2";
 
+let diskCache: { at: number; payload: string } | null = null;
+const DISK_CACHE_MS = 60_000;
+
 export async function GET() {
   try {
     await requireAdmin();
@@ -13,13 +16,18 @@ export async function GET() {
       });
     }
 
+    // 60s in-memory cache — R2 listing is the slowest admin call
+    if (diskCache && Date.now() - diskCache.at < DISK_CACHE_MS) {
+      return new Response(diskCache.payload, { headers: { "Content-Type": "application/json" } });
+    }
+
     const objects = await listVideoFiles();
     const videoFiles = objects.filter((o) =>
       /\.(mp4|mkv|webm|avi|mov)$/i.test(o.key)
     );
     const totalSize = videoFiles.reduce((sum, o) => sum + o.size, 0);
 
-    return NextResponse.json({
+    const payload = JSON.stringify({
       success: true,
       data: {
         disk: {
@@ -30,6 +38,8 @@ export async function GET() {
         },
       },
     });
+    diskCache = { at: Date.now(), payload };
+    return new Response(payload, { headers: { "Content-Type": "application/json" } });
   } catch (err) {
     if (err instanceof Error && err.message === "Unauthorized") {
       return NextResponse.json({ success: false, error: "Unauthorized" }, { status: 401 });

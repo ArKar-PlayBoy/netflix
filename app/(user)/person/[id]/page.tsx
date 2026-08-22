@@ -142,6 +142,7 @@ export default async function PersonPage({
         </div>
       </div>
 
+
       {person.biography && (
         <div className="mb-10">
           <h2 className="text-2xl font-bold mb-4 border-l-4 border-primary pl-3">Biography</h2>
