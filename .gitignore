@@ -49,3 +49,5 @@ next-env.d.ts
 /data/*.json
 /data/*.db
 /data/*.bak
+
+dev-log.txt
