@@ -67,7 +67,7 @@ export async function GET(request: Request) {
     });
 
     const ip = getClientIp(request);
-    await createUserSession(user.id);
+    await createUserSession(user.id, user.session_ver);
     await logAudit("user.login", `Google sign-in "${user.name}" <${user.email}> (${ip})`);
 
     const res = NextResponse.redirect(origin);

@@ -37,8 +37,11 @@ function sign(payload: string): string {
   return crypto.createHmac("sha256", SECRET).update(payload).digest("hex");
 }
 
-export async function createUserSession(userId: number): Promise<void> {
-  const payload = `${userId}:${Date.now()}`;
+/** Session token = base64(userId : sessionVer : timestamp : signature).
+ *  sessionVer lives in the users row; bumping it (logout) revokes every
+ *  issued session of that user across all devices. */
+export async function createUserSession(userId: number, sessionVer: number): Promise<void> {
+  const payload = `${userId}:${sessionVer}:${Date.now()}`;
   const token = Buffer.from(`${payload}:${sign(payload)}`).toString("base64");
   const cookieStore = await cookies();
   cookieStore.set(SESSION_COOKIE, token, {
@@ -60,14 +63,19 @@ export async function getCurrentUser(): Promise<SafeUser | null> {
 
     const decoded = Buffer.from(token, "base64").toString("utf-8");
     const parts = decoded.split(":");
-    if (parts.length !== 3) return null;
+    if (parts.length !== 4) return null;
 
-    const [userIdStr, ts, signature] = parts;
-    if (!safeEqual(sign(`${userIdStr}:${ts}`), signature)) return null;
+    const [userIdStr, verStr, ts, signature] = parts;
+    if (!safeEqual(sign(`${userIdStr}:${verStr}:${ts}`), signature)) return null;
     if (Date.now() - parseInt(ts) > SESSION_MAX_AGE * 1000) return null;
 
     const user = await findUserById(parseInt(userIdStr));
-    return user ? toSafeUser(user) : null;
+    if (!user) return null;
+
+    // Revocation check
+    if (user.session_ver !== parseInt(verStr)) return null;
+
+    return toSafeUser(user);
   } catch {
     return null;
   }

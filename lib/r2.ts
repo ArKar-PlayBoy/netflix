@@ -5,12 +5,14 @@ import {
   ListObjectsV2Command,
   HeadObjectCommand,
   DeleteObjectCommand,
+  CopyObjectCommand,
   CreateMultipartUploadCommand,
   UploadPartCommand,
   CompleteMultipartUploadCommand,
   AbortMultipartUploadCommand,
 } from "@aws-sdk/client-s3";
 import { getSignedUrl } from "@aws-sdk/s3-request-presigner";
+import crypto from "crypto";
 
 const ACCOUNT_ID = process.env.R2_ACCOUNT_ID;
 const ACCESS_KEY = process.env.R2_ACCESS_KEY_ID;
@@ -71,9 +73,14 @@ export async function listVideoFiles(): Promise<R2Object[]> {
   return out;
 }
 
-export async function getPresignedUploadUrl(key: string, contentType: string): Promise<string> {
+export async function getPresignedUploadUrl(key: string, contentType: string, originalName?: string): Promise<string> {
   const r2 = getR2();
-  const cmd = new PutObjectCommand({ Bucket: getBucket(), Key: key, ContentType: contentType });
+  const cmd = new PutObjectCommand({
+    Bucket: getBucket(),
+    Key: key,
+    ContentType: contentType,
+    ...(originalName ? { Metadata: { originalname: encodeURIComponent(originalName) } } : {}),
+  });
   return getSignedUrl(r2, cmd, { expiresIn: 3600 });
 }
 
@@ -85,10 +92,52 @@ export async function getPresignedStreamUrl(key: string, expiresIn: number = 900
   return getSignedUrl(r2, cmd, { expiresIn });
 }
 
+/** Public CDN base (custom domain attached to the bucket, e.g. https://cdn.example.com).
+ *  When set, streams redirect viewers to Cloudflare CDN instead of proxying.
+ *  Some ISPs block the raw *.r2.cloudflarestorage.com endpoint — CDN domains work. */
+export function getPublicBaseUrl(): string | null {
+  const base = process.env.R2_PUBLIC_BASE;
+  return base ? base.replace(/\/$/, "") : null;
+}
+
+export function getPublicObjectUrl(key: string): string {
+  // Encode each path segment; parens/dots are URL-safe, spaces become %20
+  return `${getPublicBaseUrl()}/${key.split("/").map(encodeURIComponent).join("/")}`;
+}
+
+/** Unguessable storage key: <random12>-<sanitized-original>.<ext>
+ *  Required when the bucket is exposed via public CDN URL — the random
+ *  prefix acts as a capability token so files can't be guessed. */
+export function generateStorageKey(originalName: string): string {
+  const ext = originalName.slice(originalName.lastIndexOf(".")).toLowerCase();
+  const base = originalName
+    .slice(0, originalName.lastIndexOf("."))
+    .replace(/[^a-zA-Z0-9._-]+/g, "-")
+    .replace(/-+/g, "-")
+    .replace(/^-|-$/g, "")
+    .slice(0, 80);
+  const rand = crypto.randomBytes(6).toString("hex");
+  return `${rand}-${base}${ext}`;
+}
+
+/** Rename an existing object to a new key (copy + delete) */
+export async function renameObject(oldKey: string, newKey: string): Promise<void> {
+  const r2 = getR2();
+  await r2.send(
+    new CopyObjectCommand({ Bucket: getBucket(), CopySource: `/${getBucket()}/${encodeURIComponent(oldKey)}`, Key: newKey })
+  );
+  await r2.send(new DeleteObjectCommand({ Bucket: getBucket(), Key: oldKey }));
+}
+
 // Multipart upload — large files are sent in parts with per-part retry
-export async function createMultipart(key: string, contentType: string): Promise<string> {
+export async function createMultipart(key: string, contentType: string, originalName?: string): Promise<string> {
   const res = await getR2().send(
-    new CreateMultipartUploadCommand({ Bucket: getBucket(), Key: key, ContentType: contentType })
+    new CreateMultipartUploadCommand({
+      Bucket: getBucket(),
+      Key: key,
+      ContentType: contentType,
+      ...(originalName ? { Metadata: { originalname: encodeURIComponent(originalName) } } : {}),
+    })
   );
   return res.UploadId!;
 }
@@ -128,10 +177,15 @@ export async function abortMultipart(key: string, uploadId: string): Promise<voi
   );
 }
 
-export async function headObject(key: string): Promise<{ size: number; contentType?: string } | null> {
+export async function headObject(key: string): Promise<{ size: number; contentType?: string; originalName: string | null } | null> {
   try {
     const res = await getR2().send(new HeadObjectCommand({ Bucket: getBucket(), Key: key }));
-    return { size: res.ContentLength ?? 0, contentType: res.ContentType };
+    const raw = res.Metadata?.originalname;
+    return {
+      size: res.ContentLength ?? 0,
+      contentType: res.ContentType,
+      originalName: raw ? decodeURIComponent(raw) : null,
+    };
   } catch {
     return null;
   }

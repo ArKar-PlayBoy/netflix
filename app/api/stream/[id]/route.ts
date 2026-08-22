@@ -1,11 +1,19 @@
 import { NextResponse } from "next/server";
 import { getVideoByTmdbId } from "@/lib/videos";
 import { getEpisodeById } from "@/lib/db";
-import { isR2Configured, getPresignedStreamUrl } from "@/lib/r2";
+import { isR2Configured, getObjectStream, getPublicBaseUrl, getPublicObjectUrl } from "@/lib/r2";
 import { safeEqual } from "@/lib/crypto";
 import crypto from "crypto";
 
 const STREAM_SECRET = process.env.STREAM_SECRET || "default-secret-change-me";
+
+const MIME_TYPES: Record<string, string> = {
+  ".mp4": "video/mp4",
+  ".webm": "video/webm",
+  ".mkv": "video/x-matroska",
+  ".avi": "video/x-msvideo",
+  ".mov": "video/quicktime",
+};
 
 function verifyToken(token: string | null): boolean {
   if (!token) return false;
@@ -70,11 +78,36 @@ export async function GET(
       }
     }
 
-    // 302 → short-lived signed R2 URL. Video bytes flow viewer↔Cloudflare
-    // directly: no server bandwidth, scales to any audience. Range requests
-    // (seeking) are honored by R2 natively; the URL self-expires in 15 min.
-    const downloadUrl = await getPresignedStreamUrl(fileName);
-    return NextResponse.redirect(downloadUrl, 302);
+    // Delivery mode:
+    // 1. R2_PUBLIC_BASE set (custom domain / CDN) → 302 to CDN. Zero server
+    //    bandwidth, infinite scale. Use when the CDN hostname is reachable
+    //    by your audience (some ISPs block the raw r2.cloudflarestorage.com
+    //    S3 endpoint, so CDN domains are the reliable upgrade path).
+    // 2. Otherwise proxy-stream through this function (token-gated, range
+    //    passthrough). Works from any network — verified end-to-end.
+    const publicBase = getPublicBaseUrl();
+    if (publicBase) {
+      return NextResponse.redirect(getPublicObjectUrl(fileName), 302);
+    }
+
+    const range = request.headers.get("range") ?? undefined;
+    const obj = await getObjectStream(fileName, range);
+    if (!obj || !obj.body) {
+      return NextResponse.json({ success: false, error: "File not found in storage" }, { status: 404 });
+    }
+
+    const ext = "." + fileName.split(".").pop()?.toLowerCase();
+    const contentType = MIME_TYPES[ext] || "video/mp4";
+
+    const headers: Record<string, string> = {
+      "Content-Type": contentType,
+      "Accept-Ranges": "bytes",
+      "Cache-Control": "private, max-age=3600",
+    };
+    if (obj.contentLength !== undefined) headers["Content-Length"] = String(obj.contentLength);
+    if (obj.contentRange) headers["Content-Range"] = obj.contentRange;
+
+    return new Response(obj.body, { status: obj.status, headers });
   } catch (err) {
     console.error("[Stream] Error:", err);
     return NextResponse.json({ success: false, error: "Stream failed" }, { status: 500 });

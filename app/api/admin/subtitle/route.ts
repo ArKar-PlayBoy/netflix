@@ -1,4 +1,5 @@
 import { NextResponse } from "next/server";
+import crypto from "crypto";
 import { requireAdmin } from "@/lib/admin-auth";
 import { isR2Configured, getPresignedUploadUrl } from "@/lib/r2";
 import { addSubtitle } from "@/lib/db";
@@ -32,7 +33,8 @@ export async function POST(request: Request) {
       if (!SAFE_KEY_RE.test(fileName)) {
         return NextResponse.json({ success: false, error: "Invalid file name" }, { status: 400 });
       }
-      const key = `subs/${Date.now()}-${fileName.replace(/\.[^.]+$/, "")}.vtt`;
+      const rand = crypto.randomBytes(6).toString("hex");
+      const key = `subs/${rand}-${fileName.replace(/\.[^.]+$/, "").replace(/[^a-zA-Z0-9._-]+/g, "-").slice(0, 60)}.vtt`;
       const uploadUrl = await getPresignedUploadUrl(key, "text/vtt");
       return NextResponse.json({ success: true, data: { key, uploadUrl } });
     }

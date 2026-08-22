@@ -1,6 +1,6 @@
-import { createScanLog, updateScanLog, upsertEpisode } from "./db";
+import { createScanLog, updateScanLog, upsertEpisode, getRegisteredFileKeys } from "./db";
 import { upsertVideo } from "./videos";
-import { listVideoFiles, isR2Configured } from "./r2";
+import { listVideoFiles, headObject, isR2Configured } from "./r2";
 
 const TMDB_BASE = "https://api.themoviedb.org/3";
 const VIDEO_EXTENSIONS = [".mp4", ".mkv", ".webm", ".avi", ".mov"];
@@ -125,9 +125,18 @@ export async function runScan(): Promise<ScanResult> {
 
   // List video files from R2 cloud storage
   const objects = await listVideoFiles();
+  const registered = await getRegisteredFileKeys();
   const files = objects.map((o) => o.key).filter((k) =>
     VIDEO_EXTENSIONS.includes(k.slice(k.lastIndexOf(".")).toLowerCase())
   );
+
+  // Storage keys are unguessable (random prefix) — content identity lives in
+  // object metadata (original upload filename). Already-registered keys skip.
+  const nameOf = async (key: string): Promise<string | null> => {
+    if (registered.has(key)) return null;
+    const head = await headObject(key);
+    return head?.originalName ?? null;
+  };
 
   const logId = await createScanLog({
     status: "running",
@@ -145,22 +154,26 @@ export async function runScan(): Promise<ScanResult> {
 
   try {
     const filesByTmdbId: Record<string, string[]> = {};
-    const filesWithNoId: string[] = [];
+    const filesWithNoId: { file: string; original: string }[] = [];
     const tvFiles: { file: string; seriesName: string; season: number; episode: number }[] = [];
+    const originalNames = new Map<string, string>();
 
     for (const file of files) {
-      const tvPattern = detectEpisodePattern(file);
+      const original = await nameOf(file);
+      if (!original) continue; // already registered in DB
+      originalNames.set(file, original);
+      const tvPattern = detectEpisodePattern(original);
       if (tvPattern && tvPattern.seriesName) {
         tvFiles.push({ file, ...tvPattern });
         continue;
       }
-      const tmdbId = extractIdFromFilename(file);
+      const tmdbId = extractIdFromFilename(original);
       if (tmdbId) {
         const key = tmdbId.toString();
         if (!filesByTmdbId[key]) filesByTmdbId[key] = [];
         filesByTmdbId[key].push(file);
       } else {
-        filesWithNoId.push(file);
+        filesWithNoId.push({ file, original });
       }
     }
 
@@ -232,11 +245,11 @@ export async function runScan(): Promise<ScanResult> {
       }
     }
 
-    for (const file of filesWithNoId) {
+    for (const { file, original } of filesWithNoId) {
       try {
-        const searchName = cleanFilename(file);
+        const searchName = cleanFilename(original);
         const searchResult = await searchTMDB(searchName, token);
-        const quality = detectQuality(file);
+        const quality = detectQuality(original);
 
         await upsertVideo({
           tmdbId: searchResult?.id ?? null,

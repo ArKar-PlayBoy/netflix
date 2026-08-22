@@ -274,15 +274,21 @@ export default async function MoviePage({ params }: { params: Promise<{ id: stri
               {movie.overview || "No overview available."}
             </p>
             <div className="flex flex-wrap items-center gap-3 mb-4">
-              <MoviePlayer
-                movieId={movie.id}
-                title={movie.title}
-                hasLocalVideo={localVideoData.hasLocalVideo}
-                trailerKey={trailer?.key ?? null}
-                qualities={localVideoData.qualities}
-                subtitles={localVideoData.subtitles}
-                backdropUrl={movie.backdrop_path ? `https://image.tmdb.org/t/p/w1280${movie.backdrop_path}` : null}
-              />
+              {(localVideoData.hasLocalVideo || trailer) ? (
+                <MoviePlayer
+                  movieId={movie.id}
+                  title={movie.title}
+                  hasLocalVideo={localVideoData.hasLocalVideo}
+                  trailerKey={trailer?.key ?? null}
+                  qualities={localVideoData.qualities}
+                  subtitles={localVideoData.subtitles}
+                  backdropUrl={movie.backdrop_path ? `https://image.tmdb.org/t/p/w1280${movie.backdrop_path}` : null}
+                />
+              ) : (
+                <span className="inline-flex items-center gap-2 px-6 py-3 rounded-xl border border-border bg-card text-muted-foreground text-sm font-medium">
+                  🎬 Coming soon — no video yet
+                </span>
+              )}
               <FavoriteButton movieId={movie.id} />
               <WatchlistButton movieId={movie.id} />
             </div>

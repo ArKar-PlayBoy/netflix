@@ -56,7 +56,7 @@ export async function POST(request: Request) {
     }
 
     resetRateLimit(`user-login:${ip}`);
-    await createUserSession(user.id);
+    await createUserSession(user.id, user.session_ver);
     await logAudit("user.login", `Signed in "${user.name}" <${user.email}> (${ip})`);
 
     return NextResponse.json({ success: true, data: { name: user.name } });

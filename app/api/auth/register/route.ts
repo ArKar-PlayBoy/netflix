@@ -11,12 +11,15 @@ const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]{2,}$/;
 export async function POST(request: Request) {
   try {
     const ip = getClientIp(request);
-    const rl = rateLimit(`register:${ip}`, 3, 60 * 60 * 1000); // 3 per hour
-    if (!rl.allowed) {
-      return NextResponse.json(
-        { success: false, error: "Too many sign-up attempts. Try again later." },
-        { status: 429 }
-      );
+    // Abuse limit applies only in production — local testing never locks out
+    if (process.env.NODE_ENV === "production") {
+      const rl = rateLimit(`register:${ip}`, 3, 60 * 60 * 1000); // 3 per hour
+      if (!rl.allowed) {
+        return NextResponse.json(
+          { success: false, error: "Too many sign-up attempts. Try again later." },
+          { status: 429 }
+        );
+      }
     }
 
     let body;
@@ -45,9 +48,14 @@ export async function POST(request: Request) {
 
     const existing = await findUserByEmailHash(hmacHash(email));
     if (existing) {
-      // Generic message — do not reveal which emails exist (user enumeration)
+      const hasGoogle = !!existing.google_id;
       return NextResponse.json(
-        { success: false, error: "This email cannot be used. Try signing in or Google instead." },
+        {
+          success: false,
+          error: hasGoogle
+            ? "This email is already registered with Google. Please use 'Continue with Google'."
+            : "An account with this email already exists. Please sign in.",
+        },
         { status: 409 }
       );
     }
@@ -55,7 +63,7 @@ export async function POST(request: Request) {
     const passwordHash = await bcrypt.hash(password, 10);
     const user = await createEmailUser({ email, name, passwordHash });
 
-    await createUserSession(user.id);
+    await createUserSession(user.id, user.session_ver);
     await logAudit("user.register", `Registered "${user.name}" <${email}> from ${ip}`);
 
     return NextResponse.json({ success: true, data: { name: user.name } });

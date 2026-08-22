@@ -1,0 +1,71 @@
+
+> movie-app@0.1.0 dev
+> next dev
+
+▲ Next.js 16.3.1 (Turbopack)
+- Local:         http://localhost:3000
+- Network:       http://192.168.1.12:3000
+- Environments: .env
+✓ Ready in 644ms
+✓ Running next.config.ts took 53ms
+⚠ The "middleware" file convention is deprecated. Please use "proxy" instead.
+
+  To migrate automatically, run:
+  npx @next/codemod@canary middleware-to-proxy .
+
+  Learn more: https://nextjs.org/docs/messages/middleware-to-proxy
+- Experiments (use with caution):
+  · optimizePackageImports
+
+ GET /login 200 in 10.8s (next.js: 515ms, application-code: 10.3s)
+ POST /api/auth/login 200 in 8.6s (next.js: 119ms, application-code: 8.5s)
+ POST /api/auth/login 200 in 3.0s (next.js: 7ms, application-code: 3.0s)
+ POST /api/auth/set-password 401 in 2.1s (next.js: 441ms, application-code: 1612ms)
+ POST /api/auth/login 401 in 3.2s (next.js: 5ms, application-code: 3.2s)
+ GET /login 200 in 1475ms (next.js: 8ms, application-code: 1467ms)
+ POST /api/auth/login 401 in 3.0s (next.js: 5ms, application-code: 3.0s)
+ POST /api/auth/login 200 in 12.9s (next.js: 5ms, application-code: 12.8s)
+ GET /api/auth/me 200 in 1889ms (next.js: 64ms, application-code: 1825ms)
+ GET /api/auth/set-password 200 in 1467ms (next.js: 5ms, application-code: 1462ms)
+ GET /login 200 in 92ms (next.js: 8ms, application-code: 83ms)
+ POST /api/auth/login 200 in 3.3s (next.js: 5ms, application-code: 3.3s)
+ POST /api/auth/set-password 200 in 7.1s (next.js: 6ms, application-code: 7.1s)
+ POST /api/auth/login 401 in 2.1s (next.js: 5ms, application-code: 2.1s)
+ POST /api/auth/login 200 in 4.1s (next.js: 4ms, application-code: 4.1s)
+ POST /api/auth/register 200 in 8.9s (next.js: 67ms, application-code: 8.8s)
+ GET /login 200 in 84ms (next.js: 6ms, application-code: 78ms)
+ GET /admin/login 200 in 156ms (next.js: 49ms, proxy.ts: 5ms, application-code: 102ms)
+ POST /api/admin/login 200 in 5.1s (next.js: 72ms, application-code: 5.1s)
+⨯ Error: write CONNECT_TIMEOUT undefined:undefined
+    at ignore-listed frames {
+  code: 'CONNECT_TIMEOUT',
+  errno: 'CONNECT_TIMEOUT',
+  address: undefined,
+  port: undefined,
+  digest: '1114649927'
+}
+ GET /admin/dashboard 500 in 311ms (next.js: 64ms, proxy.ts: 9ms, application-code: 237ms)
+[browser] Encountered a script tag while rendering React component. Scripts inside React components are never executed when rendering on the client. Consider using template tag instead (https://developer.mozilla.org/en-US/docs/Web/HTML/Element/template). 
+[browser] Uncaught Error: write CONNECT_TIMEOUT undefined:undefined
+⨯ Error: write CONNECT_TIMEOUT undefined:undefined
+    at ignore-listed frames {
+  code: 'CONNECT_TIMEOUT',
+  errno: 'CONNECT_TIMEOUT',
+  address: undefined,
+  port: undefined,
+  digest: '1114649927'
+}
+ GET /admin/dashboard 500 in 140ms (next.js: 11ms, proxy.ts: 8ms, application-code: 122ms)
+[browser] Encountered a script tag while rendering React component. Scripts inside React components are never executed when rendering on the client. Consider using template tag instead (https://developer.mozilla.org/en-US/docs/Web/HTML/Element/template). 
+[browser] Uncaught Error: write CONNECT_TIMEOUT undefined:undefined
+⨯ Error: write CONNECT_TIMEOUT undefined:undefined
+    at ignore-listed frames {
+  code: 'CONNECT_TIMEOUT',
+  errno: 'CONNECT_TIMEOUT',
+  address: undefined,
+  port: undefined,
+  digest: '1114649927'
+}
+ GET /admin/dashboard 500 in 131ms (next.js: 11ms, proxy.ts: 8ms, application-code: 112ms)
+[browser] Encountered a script tag while rendering React component. Scripts inside React components are never executed when rendering on the client. Consider using template tag instead (https://developer.mozilla.org/en-US/docs/Web/HTML/Element/template). 
+[browser] Uncaught Error: write CONNECT_TIMEOUT undefined:undefined

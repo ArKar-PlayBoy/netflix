@@ -2,7 +2,7 @@
 
 import { useState } from "react";
 import { useRouter } from "next/navigation";
-import { Mail, Loader2 } from "lucide-react";
+import { Mail, Loader2, Eye, EyeOff } from "lucide-react";
 
 const IMG = "https://image.tmdb.org/t/p/w185";
 
@@ -58,6 +58,7 @@ export default function LoginForm({
   const [password, setPassword] = useState("");
   const [name, setName] = useState("");
   const [busy, setBusy] = useState(false);
+  const [showPw, setShowPw] = useState(false);
   const [formError, setFormError] = useState("");
 
   const errorMessages: Record<string, string> = {
@@ -182,15 +183,25 @@ export default function LoginForm({
                   className={`${inputClass} pl-11`}
                 />
               </div>
-              <input
-                type="password"
-                value={password}
-                onChange={(e) => setPassword(e.target.value)}
-                placeholder={mode === "signup" ? "Password (8+ chars)" : "Password"}
-                autoComplete={mode === "signup" ? "new-password" : "current-password"}
-                required
-                className={inputClass}
-              />
+        <div className="relative">
+          <input
+            type={showPw ? "text" : "password"}
+            value={password}
+            onChange={(e) => setPassword(e.target.value)}
+            placeholder={mode === "signup" ? "Password (8+ chars)" : "Password"}
+            autoComplete={mode === "signup" ? "new-password" : "current-password"}
+            required
+            className={`${inputClass} pr-11`}
+          />
+          <button
+            type="button"
+            onClick={() => setShowPw(!showPw)}
+            className="absolute right-3 top-1/2 -translate-y-1/2 p-1 text-white/40 hover:text-white transition-colors"
+            aria-label={showPw ? "Hide password" : "Show password"}
+          >
+            {showPw ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
+          </button>
+        </div>
 
               {errorMsg && (
                 <p className="rounded-lg border border-red-500/30 bg-red-500/10 px-3.5 py-2.5 text-[13px] text-red-300 leading-snug">

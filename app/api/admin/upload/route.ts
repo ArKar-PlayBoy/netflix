@@ -8,6 +8,7 @@ import {
   getPresignedPartUrl,
   completeMultipart,
   abortMultipart,
+  generateStorageKey,
 } from "@/lib/r2";
 import { logAudit } from "@/lib/audit";
 
@@ -53,8 +54,9 @@ export async function POST(request: Request) {
       const invalid = validateFileName(fileName);
       if (invalid) return NextResponse.json({ success: false, error: invalid }, { status: 400 });
 
-      const uploadUrl = await getPresignedUploadUrl(fileName, contentType);
-      return NextResponse.json({ success: true, data: { key: fileName, uploadUrl } });
+      const storageKey = generateStorageKey(fileName);
+      const uploadUrl = await getPresignedUploadUrl(storageKey, contentType, fileName);
+      return NextResponse.json({ success: true, data: { key: storageKey, uploadUrl } });
     }
 
     // Multipart: create session
@@ -64,8 +66,11 @@ export async function POST(request: Request) {
       const invalid = validateFileName(fileName);
       if (invalid) return NextResponse.json({ success: false, error: invalid }, { status: 400 });
 
-      const uploadId = await createMultipart(fileName, contentType);
-      return NextResponse.json({ success: true, data: { key: fileName, uploadId } });
+      // Unguessable storage key (public-CDN safe) — original name kept in
+      // object metadata so the scanner can still auto-match content
+      const storageKey = generateStorageKey(fileName);
+      const uploadId = await createMultipart(storageKey, contentType, fileName);
+      return NextResponse.json({ success: true, data: { key: storageKey, uploadId } });
     }
 
     // Multipart: presign one part

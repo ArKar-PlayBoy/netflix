@@ -111,6 +111,8 @@ export default function MoviePlayer({
   const resumeAtRef = useRef<number | null>(null);
   const hideTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const seekingRef = useRef(false);
+  const lastTapRef = useRef<{ time: number; x: number } | null>(null);
+  const [seekRipple, setSeekRipple] = useState<{ side: "l" | "r"; id: number } | null>(null);
 
   useEffect(() => {
     const { quality } = getRecommendedQuality();
@@ -319,6 +321,36 @@ export default function MoviePlayer({
     }, 3000);
   }, []);
 
+  // ===== Mobile: tap / double-tap seek (YouTube-style) =====
+  const handleVideoTap = useCallback((e: React.MouseEvent<HTMLDivElement>) => {
+    const now = Date.now();
+    const rect = e.currentTarget.getBoundingClientRect();
+    const x = e.clientX - rect.left;
+    const last = lastTapRef.current;
+
+    if (last && now - last.time < 300) {
+      // Double tap — seek ±10s based on tap side
+      const side: "l" | "r" = x < rect.width / 2 ? "l" : "r";
+      seekBy(side === "l" ? -10 : 10);
+      setSeekRipple({ side, id: now });
+      setTimeout(() => setSeekRipple(null), 500);
+      lastTapRef.current = null;
+    } else {
+      lastTapRef.current = { time: now, x };
+      setTimeout(() => {
+        if (lastTapRef.current && Date.now() - lastTapRef.current.time >= 300) {
+          // Single tap — toggle controls (mobile) or play/pause (desktop cursor)
+          if (!controlsVisible) {
+            showControls();
+          } else {
+            togglePlay();
+          }
+          lastTapRef.current = null;
+        }
+      }, 300);
+    }
+  }, [controlsVisible, seekBy, showControls, togglePlay]);
+
   const streamUrl = token
     ? `/api/stream/${movieId}?token=${token}&file=${encodeURIComponent(getSelectedFile())}`
     : null;
@@ -469,10 +501,9 @@ export default function MoviePlayer({
                   key={streamUrl}
                   src={streamUrl}
                   autoPlay
+                  playsInline
                   className="w-full h-full select-none"
                   onContextMenu={(e) => e.preventDefault()}
-                  onClick={togglePlay}
-                  onDoubleClick={toggleFullscreen}
                   onLoadedMetadata={(e) => {
                     setDuration(e.currentTarget.duration);
                     if (resumeAtRef.current && resumeAtRef.current > 5) {
@@ -504,6 +535,21 @@ export default function MoviePlayer({
                   ))}
                 </video>
 
+                {/* Tap surface: double-tap sides seek, single tap toggles controls */}
+                <div className="absolute inset-0 z-[5]" onClick={handleVideoTap}>
+                  {/* Seek ripples */}
+                  {seekRipple && (
+                    <div
+                      className={`absolute inset-y-0 ${seekRipple.side === "l" ? "left-0" : "right-0"} w-1/2 bg-white/10 flex items-center justify-center animate-[ripple_0.5s_ease-out]`}
+                    >
+                      <span className="flex flex-col items-center gap-1 text-white">
+                        {seekRipple.side === "l" ? <RotateCcw className="h-8 w-8" /> : <RotateCw className="h-8 w-8" />}
+                        <span className="text-sm font-bold">10s</span>
+                      </span>
+                    </div>
+                  )}
+                </div>
+
                 {/* Center play pulse when paused */}
                 {!isPlaying && !loading && (
                   <button onClick={togglePlay} className="absolute inset-0 z-10 flex items-center justify-center">
@@ -515,11 +561,12 @@ export default function MoviePlayer({
 
                 {/* ===== Custom control bar ===== */}
                 <div
-                  className={`absolute bottom-0 left-0 right-0 z-20 px-4 pb-2 pt-8 bg-gradient-to-t from-black/90 via-black/60 to-transparent transition-opacity duration-300 ${controlsVisible ? "opacity-100" : "opacity-0 pointer-events-none"}`}
+                  className={`absolute bottom-0 left-0 right-0 z-20 px-3 sm:px-4 pt-8 bg-gradient-to-t from-black/90 via-black/60 to-transparent transition-opacity duration-300 ${controlsVisible ? "opacity-100" : "opacity-0 pointer-events-none"}`}
+                  style={{ paddingBottom: "max(0.5rem, env(safe-area-inset-bottom))" }}
                 >
                   {/* Seek bar */}
                   <div
-                    className="relative h-4 flex items-center cursor-pointer group/seek"
+                    className="relative h-5 flex items-center cursor-pointer group/seek"
                     onClick={handleSeek}
                     onMouseMove={(e) => {
                       const rect = e.currentTarget.getBoundingClientRect();
@@ -545,19 +592,19 @@ export default function MoviePlayer({
 
                   {/* Buttons row */}
                   <div className="flex items-center gap-1.5 mt-1 text-white">
-                    <button onClick={togglePlay} className="p-2 hover:bg-white/10 rounded-full transition" aria-label={isPlaying ? "Pause (K)" : "Play (K)"}>
+                    <button onClick={togglePlay} className="p-2.5 sm:p-2 active:bg-white/20 sm:hover:bg-white/10 rounded-full transition" aria-label={isPlaying ? "Pause (K)" : "Play (K)"}>
                       {isPlaying ? <Pause className="h-5 w-5 fill-current" /> : <Play className="h-5 w-5 fill-current" />}
                     </button>
-                    <button onClick={() => seekBy(-10)} className="p-2 hover:bg-white/10 rounded-full transition" aria-label="Back 10s (J)">
+                    <button onClick={() => seekBy(-10)} className="p-2.5 sm:p-2 active:bg-white/20 sm:hover:bg-white/10 rounded-full transition" aria-label="Back 10s (J)">
                       <RotateCcw className="h-4.5 w-4.5" />
                     </button>
-                    <button onClick={() => seekBy(10)} className="p-2 hover:bg-white/10 rounded-full transition" aria-label="Forward 10s (L)">
+                    <button onClick={() => seekBy(10)} className="p-2.5 sm:p-2 active:bg-white/20 sm:hover:bg-white/10 rounded-full transition" aria-label="Forward 10s (L)">
                       <RotateCw className="h-4.5 w-4.5" />
                     </button>
 
                     {/* Volume */}
                     <div className="flex items-center gap-1 group/vol">
-                      <button onClick={toggleMute} className="p-2 hover:bg-white/10 rounded-full transition" aria-label="Mute (M)">
+                      <button onClick={toggleMute} className="p-2.5 sm:p-2 active:bg-white/20 sm:hover:bg-white/10 rounded-full transition" aria-label="Mute (M)">
                         {muted || volume === 0 ? <VolumeX className="h-5 w-5" /> : <Volume2 className="h-5 w-5" />}
                       </button>
                       <input
@@ -614,7 +661,7 @@ export default function MoviePlayer({
                     )}
 
                     {/* Fullscreen */}
-                    <button onClick={toggleFullscreen} className="p-2 hover:bg-white/10 rounded-full transition" aria-label="Fullscreen (F)">
+                    <button onClick={toggleFullscreen} className="p-2.5 sm:p-2 active:bg-white/20 sm:hover:bg-white/10 rounded-full transition" aria-label="Fullscreen (F)">
                       {isFullscreen ? <Minimize className="h-5 w-5" /> : <Maximize className="h-5 w-5" />}
                     </button>
                   </div>

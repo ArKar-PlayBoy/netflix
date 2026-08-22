@@ -86,6 +86,7 @@ export type UserRecord = {
   name: string;
   picture: string | null;
   password_hash: string | null;
+  session_ver: number;
   created_at: string;
 };
 
@@ -150,7 +151,12 @@ function mapScanLog(row: DbScanLogRow): ScanLog {
 }
 
 function mapUser(row: DbUserRow): UserRecord {
-  return { ...row, email: decrypt(row.email), created_at: iso(row.created_at)! };
+  return {
+    ...row,
+    email: decrypt(row.email),
+    session_ver: (row as { session_ver?: number }).session_ver ?? 0,
+    created_at: iso(row.created_at)!,
+  };
 }
 
 let schemaPromise: Promise<void> | null = null;
@@ -158,109 +164,115 @@ let schemaPromise: Promise<void> | null = null;
 function ensureSchema(): Promise<void> {
   if (!schemaPromise) {
     schemaPromise = (async () => {
-      await getSql()`CREATE TABLE IF NOT EXISTS videos (
-        id SERIAL PRIMARY KEY,
-        tmdb_id INTEGER UNIQUE,
-        title TEXT NOT NULL,
-        year TEXT,
-        poster_path TEXT,
-        backdrop_path TEXT,
-        overview TEXT DEFAULT '',
-        vote_average REAL DEFAULT 0,
-        file TEXT NOT NULL,
-        qualities JSONB DEFAULT '[]'::jsonb,
-        created_at TIMESTAMPTZ DEFAULT now(),
-        updated_at TIMESTAMPTZ DEFAULT now()
-      )`;
-      await getSql()`CREATE INDEX IF NOT EXISTS idx_videos_tmdb_id ON videos(tmdb_id)`;
-      await getSql()`CREATE TABLE IF NOT EXISTS settings (
-        key TEXT PRIMARY KEY,
-        value TEXT NOT NULL,
-        updated_at TIMESTAMPTZ DEFAULT now()
-      )`;
-      await getSql()`CREATE TABLE IF NOT EXISTS scan_logs (
-        id SERIAL PRIMARY KEY,
-        status TEXT NOT NULL DEFAULT 'running',
-        files_found INTEGER DEFAULT 0,
-        matched INTEGER DEFAULT 0,
-        unmatched INTEGER DEFAULT 0,
-        errors JSONB DEFAULT '[]'::jsonb,
-        started_at TIMESTAMPTZ DEFAULT now(),
-        completed_at TIMESTAMPTZ
-      )`;
-      await getSql()`CREATE TABLE IF NOT EXISTS featured (
-        id SERIAL PRIMARY KEY,
-        movie_id INTEGER NOT NULL,
-        position INTEGER NOT NULL,
-        type TEXT DEFAULT 'hero',
-        created_at TIMESTAMPTZ DEFAULT now()
-      )`;
-      await getSql()`CREATE TABLE IF NOT EXISTS audit_logs (
-        id SERIAL PRIMARY KEY,
-        action TEXT NOT NULL,
-        detail TEXT DEFAULT '',
-        created_at TIMESTAMPTZ DEFAULT now()
-      )`;
-      await getSql()`CREATE TABLE IF NOT EXISTS users (
-        id SERIAL PRIMARY KEY,
-        google_id TEXT UNIQUE,
-        email_hash TEXT UNIQUE NOT NULL,
-        email TEXT NOT NULL,
-        name TEXT NOT NULL,
-        picture TEXT,
-        password_hash TEXT,
-        created_at TIMESTAMPTZ DEFAULT now()
-      )`;
-      await getSql()`CREATE TABLE IF NOT EXISTS favorites (
-        id SERIAL PRIMARY KEY,
-        user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-        tmdb_id INTEGER NOT NULL,
-        created_at TIMESTAMPTZ DEFAULT now(),
-        UNIQUE(user_id, tmdb_id)
-      )`;
-      await getSql()`CREATE TABLE IF NOT EXISTS watch_progress (
-        user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-        tmdb_id INTEGER NOT NULL,
-        position_seconds REAL NOT NULL DEFAULT 0,
-        duration_seconds REAL NOT NULL DEFAULT 0,
-        updated_at TIMESTAMPTZ DEFAULT now(),
-        UNIQUE(user_id, tmdb_id)
-      )`;
-      await getSql()`CREATE TABLE IF NOT EXISTS ratings (
-        user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-        tmdb_id INTEGER NOT NULL,
-        score INTEGER NOT NULL CHECK (score >= 1 AND score <= 10),
-        created_at TIMESTAMPTZ DEFAULT now(),
-        UNIQUE(user_id, tmdb_id)
-      )`;
-      await getSql()`CREATE TABLE IF NOT EXISTS comments (
-        id SERIAL PRIMARY KEY,
-        user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-        tmdb_id INTEGER NOT NULL,
-        body TEXT NOT NULL,
-        created_at TIMESTAMPTZ DEFAULT now()
-      )`;
-      await getSql()`CREATE INDEX IF NOT EXISTS idx_comments_tmdb ON comments(tmdb_id, created_at)`;
-      await getSql()`CREATE TABLE IF NOT EXISTS watchlist (
-        user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-        tmdb_id INTEGER NOT NULL,
-        created_at TIMESTAMPTZ DEFAULT now(),
-        UNIQUE(user_id, tmdb_id)
-      )`;
-      // Subtitles stored per video: [{lang, label, file}]
-      await getSql()`ALTER TABLE videos ADD COLUMN IF NOT EXISTS subtitles JSONB DEFAULT '[]'::jsonb`;
-      await getSql()`ALTER TABLE videos ADD COLUMN IF NOT EXISTS media_type TEXT DEFAULT 'movie'`;
-      await getSql()`CREATE TABLE IF NOT EXISTS episodes (
-        id SERIAL PRIMARY KEY,
-        video_id INTEGER NOT NULL REFERENCES videos(id) ON DELETE CASCADE,
-        season INTEGER NOT NULL,
-        episode INTEGER NOT NULL,
-        name TEXT,
-        file TEXT NOT NULL,
-        qualities JSONB DEFAULT '[]'::jsonb,
-        created_at TIMESTAMPTZ DEFAULT now(),
-        UNIQUE(video_id, season, episode)
-      )`;
+      // Single batch = ONE round trip to Neon instead of 15+ (cold-start login went 12s → <1s)
+      await getSql().unsafe(`
+        CREATE TABLE IF NOT EXISTS videos (
+          id SERIAL PRIMARY KEY,
+          tmdb_id INTEGER UNIQUE,
+          title TEXT NOT NULL,
+          year TEXT,
+          poster_path TEXT,
+          backdrop_path TEXT,
+          overview TEXT DEFAULT '',
+          vote_average REAL DEFAULT 0,
+          file TEXT NOT NULL,
+          qualities JSONB DEFAULT '[]'::jsonb,
+          subtitles JSONB DEFAULT '[]'::jsonb,
+          media_type TEXT DEFAULT 'movie',
+          created_at TIMESTAMPTZ DEFAULT now(),
+          updated_at TIMESTAMPTZ DEFAULT now()
+        );
+        CREATE INDEX IF NOT EXISTS idx_videos_tmdb_id ON videos(tmdb_id);
+        CREATE TABLE IF NOT EXISTS settings (
+          key TEXT PRIMARY KEY,
+          value TEXT NOT NULL,
+          updated_at TIMESTAMPTZ DEFAULT now()
+        );
+        CREATE TABLE IF NOT EXISTS scan_logs (
+          id SERIAL PRIMARY KEY,
+          status TEXT NOT NULL DEFAULT 'running',
+          files_found INTEGER DEFAULT 0,
+          matched INTEGER DEFAULT 0,
+          unmatched INTEGER DEFAULT 0,
+          errors JSONB DEFAULT '[]'::jsonb,
+          started_at TIMESTAMPTZ DEFAULT now(),
+          completed_at TIMESTAMPTZ
+        );
+        CREATE TABLE IF NOT EXISTS featured (
+          id SERIAL PRIMARY KEY,
+          movie_id INTEGER NOT NULL,
+          position INTEGER NOT NULL,
+          type TEXT DEFAULT 'hero',
+          created_at TIMESTAMPTZ DEFAULT now()
+        );
+        CREATE TABLE IF NOT EXISTS audit_logs (
+          id SERIAL PRIMARY KEY,
+          action TEXT NOT NULL,
+          detail TEXT DEFAULT '',
+          created_at TIMESTAMPTZ DEFAULT now()
+        );
+        CREATE TABLE IF NOT EXISTS users (
+          id SERIAL PRIMARY KEY,
+          google_id TEXT UNIQUE,
+          email_hash TEXT UNIQUE NOT NULL,
+          email TEXT NOT NULL,
+          name TEXT NOT NULL,
+          picture TEXT,
+          password_hash TEXT,
+          session_ver INTEGER NOT NULL DEFAULT 0,
+          created_at TIMESTAMPTZ DEFAULT now()
+        );
+        CREATE TABLE IF NOT EXISTS favorites (
+          id SERIAL PRIMARY KEY,
+          user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+          tmdb_id INTEGER NOT NULL,
+          created_at TIMESTAMPTZ DEFAULT now(),
+          UNIQUE(user_id, tmdb_id)
+        );
+        CREATE TABLE IF NOT EXISTS watch_progress (
+          user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+          tmdb_id INTEGER NOT NULL,
+          position_seconds REAL NOT NULL DEFAULT 0,
+          duration_seconds REAL NOT NULL DEFAULT 0,
+          updated_at TIMESTAMPTZ DEFAULT now(),
+          UNIQUE(user_id, tmdb_id)
+        );
+        CREATE TABLE IF NOT EXISTS ratings (
+          user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+          tmdb_id INTEGER NOT NULL,
+          score INTEGER NOT NULL CHECK (score >= 1 AND score <= 10),
+          created_at TIMESTAMPTZ DEFAULT now(),
+          UNIQUE(user_id, tmdb_id)
+        );
+        CREATE TABLE IF NOT EXISTS comments (
+          id SERIAL PRIMARY KEY,
+          user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+          tmdb_id INTEGER NOT NULL,
+          body TEXT NOT NULL,
+          created_at TIMESTAMPTZ DEFAULT now()
+        );
+        CREATE INDEX IF NOT EXISTS idx_comments_tmdb ON comments(tmdb_id, created_at);
+        CREATE TABLE IF NOT EXISTS watchlist (
+          user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+          tmdb_id INTEGER NOT NULL,
+          created_at TIMESTAMPTZ DEFAULT now(),
+          UNIQUE(user_id, tmdb_id)
+        );
+        CREATE TABLE IF NOT EXISTS episodes (
+          id SERIAL PRIMARY KEY,
+          video_id INTEGER NOT NULL REFERENCES videos(id) ON DELETE CASCADE,
+          season INTEGER NOT NULL,
+          episode INTEGER NOT NULL,
+          name TEXT,
+          file TEXT NOT NULL,
+          qualities JSONB DEFAULT '[]'::jsonb,
+          created_at TIMESTAMPTZ DEFAULT now(),
+          UNIQUE(video_id, season, episode)
+        );
+        ALTER TABLE videos ADD COLUMN IF NOT EXISTS subtitles JSONB DEFAULT '[]'::jsonb;
+        ALTER TABLE videos ADD COLUMN IF NOT EXISTS media_type TEXT DEFAULT 'movie';
+        ALTER TABLE users ADD COLUMN IF NOT EXISTS session_ver INTEGER NOT NULL DEFAULT 0;
+      `);
     })();
   }
   return schemaPromise;
@@ -580,8 +592,14 @@ export async function clearFeatured(): Promise<void> {
 }
 
 // Users — PII protection: google_id/email_hash HMAC-hashed, email encrypted at rest
+// Users — PII protection: google_id/email_hash HMAC-hashed, email encrypted at rest
 function toPublicUser(stored: DbUserRow): UserRecord {
-  return { ...stored, email: decrypt(stored.email), created_at: iso(stored.created_at)! };
+  return {
+    ...stored,
+    email: decrypt(stored.email),
+    session_ver: (stored as { session_ver?: number }).session_ver ?? 0,
+    created_at: iso(stored.created_at)!,
+  };
 }
 
 export async function findUserByGoogleId(googleId: string): Promise<UserRecord | null> {
@@ -773,8 +791,7 @@ export async function getWatchlistIds(userId: number): Promise<number[]> {
   return rows.map((r) => r.tmdb_id);
 }
 
-export async function addSubtitle(videoId: number, lang: string, label: string, file: string): Promise<void> {
-  await ensureSchema();
+export async function addSubtitle(videoId: number, lang: string, label: string, file: string): Promise<void> {  await ensureSchema();
   const rows = await getSql()<DbVideoRow[]>`SELECT subtitles FROM videos WHERE id = ${videoId}`;
   if (!rows[0]) throw new Error("Video not found");
   const current: VideoRecord["subtitles"] = Array.isArray(rows[0].subtitles)
@@ -827,5 +844,44 @@ export async function getEpisodeById(episodeId: number): Promise<EpisodeRecord |
   const r = rows[0];
   if (!r) return null;
   return { ...r, qualities: typeof r.qualities === "string" ? JSON.parse(r.qualities) : r.qualities };
+}
+
+// ===== Session revocation =====
+
+export async function bumpUserSessionVer(userId: number): Promise<number> {
+  await ensureSchema();
+  const rows = await getSql()<{ ver: number }[]>`
+    UPDATE users SET session_ver = session_ver + 1 WHERE id = ${userId} RETURNING session_ver AS ver
+  `;
+  return rows[0]?.ver ?? 0;
+}
+
+export async function getAdminSessionVer(): Promise<number> {
+  await ensureSchema();
+  const rows = await getSql()<{ value: string }[]>`SELECT value FROM settings WHERE key = 'admin_session_ver'`;
+  return parseInt(rows[0]?.value ?? "0", 10) || 0;
+}
+
+export async function bumpAdminSessionVer(): Promise<number> {
+  const next = (await getAdminSessionVer()) + 1;
+  await ensureSchema();
+  await getSql()`
+    INSERT INTO settings (key, value, updated_at) VALUES ('admin_session_ver', ${String(next)}, now())
+    ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value, updated_at = now()
+  `;
+  return next;
+}
+
+/** Every storage key already registered in the DB (videos + episodes) */
+export async function getRegisteredFileKeys(): Promise<Set<string>> {
+  await ensureSchema();
+  const v = await getSql()<{ file: string }[]>`SELECT file FROM videos`;
+  const e = await getSql()<{ file: string }[]>`SELECT file FROM episodes`;
+  return new Set([...v.map((r) => r.file), ...e.map((r) => r.file)]);
+}
+
+export async function setUserPassword(userId: number, passwordHash: string): Promise<void> {
+  await ensureSchema();
+  await getSql()`UPDATE users SET password_hash = ${passwordHash} WHERE id = ${userId}`;
 }
 
