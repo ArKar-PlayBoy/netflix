@@ -49,6 +49,10 @@ async function searchTMDB(query: string, token: string) {
   }
 }
 
+function searchResultTitle(result: { title?: string; name?: string }): string {
+  return result.title ?? result.name ?? "Unknown";
+}
+
 async function fetchMovieDetails(id: number, token: string) {
   try {
     const res = await fetch(`${TMDB_BASE}/movie/${id}?language=en-US`, {
@@ -70,6 +74,25 @@ async function searchTV(query: string, token: string) {
     if (!res.ok) return null;
     const data = await res.json();
     return data.results?.[0] ?? null;
+  } catch {
+    return null;
+  }
+}
+
+/** Multi-search: checks movies AND TV, returns best match with its type */
+async function searchMulti(query: string, token: string): Promise<{ id: number; mediaType: "movie" | "tv"; result: any } | null> {
+  try {
+    const res = await fetch(
+      `${TMDB_BASE}/search/multi?query=${encodeURIComponent(query)}&include_adult=false&language=en-US&page=1`,
+      { headers: { Authorization: `Bearer ${token}` } }
+    );
+    if (!res.ok) return null;
+    const data = await res.json();
+    const hit = (data.results ?? []).find(
+      (r: { media_type?: string }) => r.media_type === "movie" || r.media_type === "tv"
+    );
+    if (!hit) return null;
+    return { id: hit.id, mediaType: hit.media_type, result: hit };
   } catch {
     return null;
   }
@@ -248,23 +271,53 @@ export async function runScan(): Promise<ScanResult> {
     for (const { file, original } of filesWithNoId) {
       try {
         const searchName = cleanFilename(original);
-        const searchResult = await searchTMDB(searchName, token);
         const quality = detectQuality(original);
+        const pattern = detectEpisodePattern(original);
 
-        await upsertVideo({
-          tmdbId: searchResult?.id ?? null,
-          title: searchResult?.title ?? searchName,
-          year: searchResult?.release_date?.split("-")[0] ?? null,
-          posterPath: searchResult?.poster_path ?? null,
-          backdropPath: searchResult?.backdrop_path ?? null,
-          overview: searchResult?.overview ?? "",
-          voteAverage: searchResult?.vote_average ?? 0,
-          file,
-          qualities: [{ quality, file }],
-        });
+        // Multi-search: match movies AND TV shows correctly
+        const multi = await searchMulti(searchName, token);
 
-        if (searchResult) matched++;
-        else unmatched++;
+        if (multi?.mediaType === "tv") {
+          const details = await fetchTVDetails(multi.id, token);
+          const videoId = await upsertVideo({
+            mediaType: "tv",
+            tmdbId: multi.id,
+            title: details?.name ?? searchResultTitle(multi.result),
+            year: details?.first_air_date?.split("-")[0] ?? null,
+            posterPath: details?.poster_path ?? null,
+            backdropPath: details?.backdrop_path ?? null,
+            overview: details?.overview ?? "",
+            voteAverage: details?.vote_average ?? 0,
+            file,
+            qualities: [{ quality, file }],
+          });
+          // If the filename carries SxxEyy, register that episode; else E1
+          const epMatch = pattern ?? { season: 1, episode: 1 };
+          await upsertEpisode(videoId, epMatch.season, epMatch.episode, file, quality);
+          matched++;
+        } else if (multi) {
+          const details = await fetchMovieDetails(multi.id, token);
+          await upsertVideo({
+            tmdbId: multi.id,
+            title: details?.title ?? searchResultTitle(multi.result),
+            year: details?.release_date?.split("-")[0] ?? null,
+            posterPath: details?.poster_path ?? null,
+            backdropPath: details?.backdrop_path ?? null,
+            overview: details?.overview ?? "",
+            voteAverage: details?.vote_average ?? 0,
+            file,
+            qualities: [{ quality, file }],
+          });
+          matched++;
+        } else {
+          await upsertVideo({
+            tmdbId: null,
+            title: searchName,
+            file,
+            qualities: [{ quality, file }],
+          });
+          unmatched++;
+        }
       } catch (err) {
         errors.push(`Error processing ${file}: ${err}`);
         unmatched++;
