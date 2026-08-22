@@ -1,4 +1,5 @@
 import { NextResponse } from "next/server";
+import { safeJson } from "@/lib/http";
 import { getCurrentUser } from "@/lib/user-auth";
 import { setRating, getMyRating } from "@/lib/db";
 
@@ -23,12 +24,9 @@ export async function POST(request: Request) {
     const user = await getCurrentUser();
     if (!user) return NextResponse.json({ success: false, error: "Unauthorized" }, { status: 401 });
 
-    let body;
-    try {
-      body = await request.json();
-    } catch {
-      return NextResponse.json({ success: false, error: "Invalid JSON body" }, { status: 400 });
-    }
+    const parsed = await safeJson(request);
+    if (!parsed.ok) return parsed.response;
+    const body = parsed.data;
 
     const { movieId, score } = body;
     if (typeof movieId !== "number" || typeof score !== "number" || score < 1 || score > 10) {

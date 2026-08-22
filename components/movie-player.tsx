@@ -113,6 +113,50 @@ export default function MoviePlayer({
   const seekingRef = useRef(false);
   const lastTapRef = useRef<{ time: number; x: number } | null>(null);
   const [seekRipple, setSeekRipple] = useState<{ side: "l" | "r"; id: number } | null>(null);
+  const [reloadNonce, setReloadNonce] = useState(0);
+  const [longPress2x, setLongPress2x] = useState(false);
+  const longPressTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const longPressActiveRef = useRef(false);
+  const suppressTapRef = useRef(false);
+  const touchStartRef = useRef<{ x: number; y: number } | null>(null);
+
+  const startLongPress = (e: React.TouchEvent) => {
+    const t = e.touches[0];
+    touchStartRef.current = { x: t.clientX, y: t.clientY };
+    longPressTimerRef.current = setTimeout(() => {
+      const v = videoRef.current;
+      if (v && !v.paused) {
+        v.playbackRate = 2;
+        longPressActiveRef.current = true;
+        setLongPress2x(true);
+      }
+    }, 450);
+  };
+
+  const cancelLongPress = (e?: React.TouchEvent) => {
+    if (longPressTimerRef.current) { clearTimeout(longPressTimerRef.current); longPressTimerRef.current = null; }
+    // Moved finger = not a hold
+    if (e && touchStartRef.current) {
+      const t = e.touches[0];
+      if (Math.abs(t.clientX - touchStartRef.current.x) > 12 || Math.abs(t.clientY - touchStartRef.current.y) > 12) {
+        if (!longPressActiveRef.current) { longPressTimerRef.current = null; }
+      }
+    }
+  };
+
+  const endLongPress = () => {
+    if (longPressTimerRef.current) { clearTimeout(longPressTimerRef.current); longPressTimerRef.current = null; }
+    if (longPressActiveRef.current) {
+      const v = videoRef.current;
+      if (v) v.playbackRate = speed;
+      longPressActiveRef.current = false;
+      setLongPress2x(false);
+      suppressTapRef.current = true;
+      setTimeout(() => { suppressTapRef.current = false; }, 350);
+    }
+  };
+  const menuOpenRef = useRef(false);
+  menuOpenRef.current = showQualityMenu || showSpeedMenu;
 
   useEffect(() => {
     const { quality } = getRecommendedQuality();
@@ -152,10 +196,10 @@ export default function MoviePlayer({
     return qualities.find((q) => q.quality === effective)?.file ?? qualities[0]?.file ?? "";
   }, [qualities, currentQuality, autoQuality]);
 
-  const fetchToken = useCallback(async () => {
+  const fetchToken = useCallback(async (force = false) => {
     try {
       setLoading(true);
-      const cached = getCachedToken();
+      const cached = force ? null : getCachedToken();
       if (cached) { setToken(cached); setTokenError(false); setLoading(false); return; }
       const t = await fetchFreshToken();
       setToken(t);
@@ -312,12 +356,12 @@ export default function MoviePlayer({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [showModal, hasLocalVideo, speed, subtitleOn, togglePlay, seekBy, changeVolume, toggleMute, toggleFullscreen, toggleSubtitles, setPlaybackSpeed]);
 
-  // Auto-hide controls
+  // Auto-hide controls (never while a menu is open — that was "vanishing selection" bug)
   const showControls = useCallback(() => {
     setControlsVisible(true);
     if (hideTimerRef.current) clearTimeout(hideTimerRef.current);
     hideTimerRef.current = setTimeout(() => {
-      if (!videoRef.current?.paused) setControlsVisible(false);
+      if (!videoRef.current?.paused && !menuOpenRef.current) setControlsVisible(false);
     }, 3000);
   }, []);
 
@@ -339,17 +383,79 @@ export default function MoviePlayer({
       lastTapRef.current = { time: now, x };
       setTimeout(() => {
         if (lastTapRef.current && Date.now() - lastTapRef.current.time >= 300) {
-          // Single tap — toggle controls (mobile) or play/pause (desktop cursor)
+          // Mobile pattern: tap toggles control visibility.
+          // Desktop keeps click = play/pause.
+          const canHover =
+            typeof window !== "undefined" &&
+            window.matchMedia("(hover: hover)").matches;
+
           if (!controlsVisible) {
             showControls();
-          } else {
+          } else if (canHover) {
             togglePlay();
+          } else {
+            setControlsVisible(false);
           }
           lastTapRef.current = null;
         }
       }, 300);
     }
   }, [controlsVisible, seekBy, showControls, togglePlay]);
+
+  // ===== Adaptive quality (Auto mode only) =====
+  // Watches buffer health: stalls → step DOWN; sustained headroom → step UP.
+  const LADDER = ["480p", "720p", "1080p", "4K"];
+  const lastSwitchRef = useRef(0);
+  const stableChecksRef = useRef(0);
+  const bufferedAheadRef = useRef(0);
+
+  useEffect(() => {
+    if (!showModal || !hasLocalVideo || currentQuality !== "auto") return;
+    const id = setInterval(() => {
+      const v = videoRef.current;
+      if (!v || v.paused || !v.duration) return;
+
+      let ahead = 0;
+      for (let i = 0; i < v.buffered.length; i++) {
+        if (v.buffered.start(i) <= v.currentTime && v.buffered.end(i) >= v.currentTime) {
+          ahead = v.buffered.end(i) - v.currentTime;
+          break;
+        }
+      }
+      bufferedAheadRef.current = ahead;
+
+      const now = Date.now();
+      if (now - lastSwitchRef.current < 8000) return; // no flapping
+
+      const eff = currentQuality === "auto" ? autoQuality : currentQuality;
+      const idx = LADDER.indexOf(eff);
+      if (idx === -1) return;
+
+      // Struggling: less than 6s ahead → drop a level
+      if (ahead < 6 && idx > 0) {
+        switchQuality(LADDER[idx - 1]);
+        setCurrentQuality("auto");
+        lastSwitchRef.current = now;
+        stableChecksRef.current = 0;
+        return;
+      }
+
+      // Healthy: 25s+ ahead twice in a row → try upgrading
+      if (ahead > 25 && idx < LADDER.length - 1) {
+        stableChecksRef.current++;
+        if (stableChecksRef.current >= 2) {
+          switchQuality(LADDER[idx + 1]);
+          setCurrentQuality("auto");
+          lastSwitchRef.current = now;
+          stableChecksRef.current = 0;
+        }
+      } else {
+        stableChecksRef.current = 0;
+      }
+    }, 5000);
+    return () => clearInterval(id);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [showModal, hasLocalVideo, currentQuality, autoQuality, qualities]);
 
   const streamUrl = token
     ? `/api/stream/${movieId}?token=${token}&file=${encodeURIComponent(getSelectedFile())}`
@@ -379,12 +485,13 @@ export default function MoviePlayer({
       </button>
 
       {showModal && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/95 p-4" onClick={closeModal}>
+        <div className="fixed inset-0 z-[200] bg-black sm:bg-black/95 sm:flex sm:items-center sm:justify-center sm:p-4" onClick={closeModal}>
           <div
             ref={containerRef}
-            className="relative w-full max-w-5xl aspect-video bg-black rounded-lg overflow-hidden shadow-2xl group/player"
+            className="relative w-full aspect-video h-full sm:h-auto sm:max-w-5xl bg-black sm:rounded-lg overflow-hidden shadow-2xl group/player"
             onClick={(e) => e.stopPropagation()}
             onMouseMove={() => { if (hasLocalVideo) showControls(); }}
+            onPointerDown={() => { lastTapRef.current = null; if (hasLocalVideo) showControls(); }}
           >
             {/* Top bar */}
             <div className={`absolute top-0 left-0 right-0 z-20 flex items-center justify-between px-4 py-3 bg-gradient-to-b from-black/80 to-transparent transition-opacity duration-300 ${hasLocalVideo && !controlsVisible ? "opacity-0" : "opacity-100"}`}>
@@ -394,61 +501,10 @@ export default function MoviePlayer({
               </button>
             </div>
 
-            {/* Quality badge + menus */}
+            {/* Quality indicator (display-only — selection lives in control bar) */}
             {hasLocalVideo && (
-              <div className={`absolute top-12 left-4 z-30 flex items-center gap-2 transition-opacity duration-300 ${!controlsVisible ? "opacity-0" : "opacity-100"}`}>
-                <div ref={qualityMenuRef}>
-                  <button
-                    onClick={() => { setShowQualityMenu(!showQualityMenu); setShowSpeedMenu(false); }}
-                    className="px-3 py-1.5 bg-black/60 hover:bg-black/80 text-white text-xs font-bold rounded backdrop-blur-sm transition border border-white/10 flex items-center gap-1.5"
-                  >
-                    {currentQuality === "auto" && <Wifi className="h-3 w-3" />}
-                    {effectiveQuality.toUpperCase()}
-                    <span className="text-[10px] opacity-70">▼</span>
-                  </button>
-                  {showQualityMenu && (
-                    <div className="absolute top-full left-0 mt-1 bg-black/90 rounded-lg border border-white/10 overflow-hidden min-w-[150px] backdrop-blur-sm">
-                      <button onClick={() => switchQuality("auto")} className="w-full flex items-center justify-between px-3 py-2 text-sm text-white hover:bg-white/10 transition">
-                        <span className="flex items-center gap-2"><Wifi className="h-3 w-3" />Auto ({autoQuality.toUpperCase()})</span>
-                        {currentQuality === "auto" && <Check className="h-3 w-3 text-green-400" />}
-                      </button>
-                      {qualities.map((q) => (
-                        <button key={q.quality} onClick={() => switchQuality(q.quality)} className="w-full flex items-center justify-between px-3 py-2 text-sm text-white hover:bg-white/10 transition">
-                          <span>{q.quality}</span>
-                          {currentQuality === q.quality && <Check className="h-3 w-3 text-green-400" />}
-                        </button>
-                      ))}
-                    </div>
-                  )}
-                </div>
-
-                {/* Speed */}
-                <div ref={speedMenuRef}>
-                  <button
-                    onClick={() => { setShowSpeedMenu(!showSpeedMenu); setShowQualityMenu(false); }}
-                    className="px-3 py-1.5 bg-black/60 hover:bg-black/80 text-white text-xs font-bold rounded backdrop-blur-sm transition border border-white/10 flex items-center gap-1.5"
-                  >
-                    <Gauge className="h-3 w-3" />
-                    {speed}×
-                  </button>
-                  {showSpeedMenu && (
-                    <div className="absolute top-full left-0 mt-1 bg-black/90 rounded-lg border border-white/10 overflow-hidden min-w-[90px] backdrop-blur-sm">
-                      {SPEEDS.map((s) => (
-                        <button key={s} onClick={() => setPlaybackSpeed(s)} className="w-full flex items-center justify-between px-3 py-2 text-sm text-white hover:bg-white/10 transition">
-                          <span>{s === 1 ? "Normal" : `${s}×`}</span>
-                          {speed === s && <Check className="h-3 w-3 text-green-400" />}
-                        </button>
-                      ))}
-                    </div>
-                  )}
-                </div>
-              </div>
-            )}
-
-            {/* Single quality (no dropdown) */}
-            {hasLocalVideo && !hasMultipleQualities && (
               <div className={`absolute top-12 left-4 z-20 transition-opacity duration-300 ${!controlsVisible ? "opacity-0" : "opacity-100"}`}>
-                <span className="px-3 py-1.5 bg-black/60 text-white text-xs font-bold rounded backdrop-blur-sm border border-white/10">
+                <span className="px-2.5 py-1 bg-black/60 text-white text-[11px] font-bold rounded backdrop-blur-sm border border-white/10">
                   {effectiveQuality.toUpperCase()}
                 </span>
               </div>
@@ -489,7 +545,7 @@ export default function MoviePlayer({
               <div className="absolute inset-0 flex flex-col items-center justify-center bg-black z-10 gap-4 px-6">
                 <AlertCircle className="h-12 w-12 text-red-500" />
                 <p className="text-white font-medium">Unable to load video</p>
-                <button onClick={fetchToken} className="px-4 py-2 bg-primary text-primary-foreground rounded-lg text-sm hover:opacity-90 transition">Retry</button>
+                    <button onClick={async () => { setLoading(true); setTokenError(false); await fetchToken(true); setReloadNonce((n) => n + 1); }} className="px-4 py-2 bg-primary text-primary-foreground rounded-lg text-sm hover:opacity-90 transition">Retry</button>
               </div>
             )}
 
@@ -522,6 +578,11 @@ export default function MoviePlayer({
                   onWaiting={() => setLoading(true)}
                   onPlaying={() => setLoading(false)}
                   onCanPlay={() => setLoading(false)}
+                  onError={() => {
+                    // Stream broke (expired URL / transient reset) → show retry panel
+                    setTokenError(true);
+                    setLoading(false);
+                  }}
                 >
                   {subtitles.map((sub) => (
                     <track
@@ -535,8 +596,14 @@ export default function MoviePlayer({
                   ))}
                 </video>
 
-                {/* Tap surface: double-tap sides seek, single tap toggles controls */}
-                <div className="absolute inset-0 z-[5]" onClick={handleVideoTap}>
+                {/* Tap surface: double-tap sides seek, single tap toggles controls, hold = 2x */}
+                <div
+                  className="absolute inset-0 z-[5] touch-manipulation select-none"
+                  onClick={(e) => { if (suppressTapRef.current) { e.stopPropagation(); return; } handleVideoTap(e); }}
+                  onTouchStart={startLongPress}
+                  onTouchMove={cancelLongPress}
+                  onTouchEnd={() => endLongPress()}
+                >
                   {/* Seek ripples */}
                   {seekRipple && (
                     <div
@@ -550,6 +617,13 @@ export default function MoviePlayer({
                   )}
                 </div>
 
+                {/* 2x hold indicator */}
+                {longPress2x && (
+                  <div className="absolute bottom-24 left-1/2 -translate-x-1/2 z-30 px-4 py-1.5 rounded-full bg-black/70 backdrop-blur-sm text-white text-sm font-bold flex items-center gap-1.5">
+                    <Play className="h-4 w-4 fill-current" /> 2x
+                  </div>
+                )}
+
                 {/* Center play pulse when paused */}
                 {!isPlaying && !loading && (
                   <button onClick={togglePlay} className="absolute inset-0 z-10 flex items-center justify-center">
@@ -561,7 +635,7 @@ export default function MoviePlayer({
 
                 {/* ===== Custom control bar ===== */}
                 <div
-                  className={`absolute bottom-0 left-0 right-0 z-20 px-3 sm:px-4 pt-8 bg-gradient-to-t from-black/90 via-black/60 to-transparent transition-opacity duration-300 ${controlsVisible ? "opacity-100" : "opacity-0 pointer-events-none"}`}
+                  className={`absolute bottom-0 left-0 right-0 z-20 px-3 sm:px-4 pt-8 bg-gradient-to-t from-black/90 via-black/60 to-transparent transition-opacity duration-300 touch-manipulation ${controlsVisible ? "opacity-100" : "opacity-0 pointer-events-none"}`}
                   style={{ paddingBottom: "max(0.5rem, env(safe-area-inset-bottom))" }}
                 >
                   {/* Seek bar */}
@@ -602,8 +676,8 @@ export default function MoviePlayer({
                       <RotateCw className="h-4.5 w-4.5" />
                     </button>
 
-                    {/* Volume */}
-                    <div className="flex items-center gap-1 group/vol">
+                    {/* Volume — desktop only; phones use hardware keys */}
+                    <div className="hidden sm:flex items-center gap-1 group/vol">
                       <button onClick={toggleMute} className="p-2.5 sm:p-2 active:bg-white/20 sm:hover:bg-white/10 rounded-full transition" aria-label="Mute (M)">
                         {muted || volume === 0 ? <VolumeX className="h-5 w-5" /> : <Volume2 className="h-5 w-5" />}
                       </button>
@@ -623,7 +697,7 @@ export default function MoviePlayer({
                       />
                     </div>
 
-                    <span className="text-xs tabular-nums ml-1 text-white/90">
+                    <span className="hidden sm:inline text-xs tabular-nums ml-1 text-white/90">
                       {fmt(currentTime)} <span className="text-white/50">/ {fmt(duration)}</span>
                     </span>
 
@@ -640,24 +714,55 @@ export default function MoviePlayer({
                       </button>
                     )}
 
-                    {/* Speed */}
-                    <button
-                      onClick={() => { setShowSpeedMenu(!showSpeedMenu); setShowQualityMenu(false); }}
-                      className="px-2 py-2 hover:bg-white/10 rounded-full transition text-xs font-bold"
-                      aria-label="Playback speed"
-                    >
-                      {speed}×
-                    </button>
-
-                    {/* Quality */}
-                    {hasMultipleQualities && (
+                    {/* Speed — menu opens ABOVE the bar, thumb-friendly */}
+                    <div className="relative" ref={speedMenuRef}>
                       <button
-                        onClick={() => { setShowQualityMenu(!showQualityMenu); setShowSpeedMenu(false); }}
-                        className="px-2 py-2 hover:bg-white/10 rounded-full transition text-xs font-bold flex items-center gap-1"
+                        onClick={() => { setShowSpeedMenu(!showSpeedMenu); setShowQualityMenu(false); showControls(); }}
+                        className={`px-2.5 py-2.5 sm:px-2 sm:py-2 rounded-full transition text-xs font-bold ${showSpeedMenu ? "bg-white/20" : "active:bg-white/20 sm:hover:bg-white/10"}`}
+                        aria-label="Playback speed"
                       >
-                        {currentQuality === "auto" && <Wifi className="h-3.5 w-3.5" />}
-                        {effectiveQuality.toUpperCase()}
+                        {speed}×
                       </button>
+                      {showSpeedMenu && (
+                        <div className="absolute bottom-full right-0 mb-3 bg-black/95 rounded-xl border border-white/10 overflow-hidden min-w-[130px] backdrop-blur-md shadow-2xl">
+                          <p className="px-4 pt-2.5 pb-1 text-[11px] uppercase tracking-wider text-white/40 font-semibold">Speed</p>
+                          {SPEEDS.map((s) => (
+                            <button key={s} onClick={() => setPlaybackSpeed(s)} className="w-full flex items-center justify-between px-4 py-3 text-sm text-white active:bg-white/20 sm:hover:bg-white/10 transition min-w-[120px]">
+                              <span>{s === 1 ? "Normal" : `${s}×`}</span>
+                              {speed === s && <Check className="h-4 w-4 text-netflix" />}
+                            </button>
+                          ))}
+                        </div>
+                      )}
+                    </div>
+
+                    {/* Quality — same bottom-sheet pattern */}
+                    {hasMultipleQualities && (
+                      <div className="relative" ref={qualityMenuRef}>
+                        <button
+                          onClick={() => { setShowQualityMenu(!showQualityMenu); setShowSpeedMenu(false); showControls(); }}
+                          className={`px-2.5 py-2.5 sm:px-2 sm:py-2 rounded-full transition text-xs font-bold flex items-center gap-1 ${showQualityMenu ? "bg-white/20" : "active:bg-white/20 sm:hover:bg-white/10"}`}
+                          aria-label="Quality"
+                        >
+                          {currentQuality === "auto" && <Wifi className="h-3.5 w-3.5" />}
+                          {effectiveQuality.toUpperCase()}
+                        </button>
+                        {showQualityMenu && (
+                          <div className="absolute bottom-full right-0 mb-3 bg-black/95 rounded-xl border border-white/10 overflow-hidden min-w-[170px] backdrop-blur-md shadow-2xl">
+                            <p className="px-4 pt-2.5 pb-1 text-[11px] uppercase tracking-wider text-white/40 font-semibold">Quality</p>
+                            <button onClick={() => switchQuality("auto")} className="w-full flex items-center justify-between px-4 py-3 text-sm text-white active:bg-white/20 sm:hover:bg-white/10 transition">
+                              <span className="flex items-center gap-2"><Wifi className="h-4 w-4" />Auto</span>
+                              {currentQuality === "auto" && <Check className="h-4 w-4 text-netflix" />}
+                            </button>
+                            {qualities.map((q) => (
+                              <button key={q.quality} onClick={() => switchQuality(q.quality)} className="w-full flex items-center justify-between px-4 py-3 text-sm text-white active:bg-white/20 sm:hover:bg-white/10 transition">
+                                <span>{q.quality}</span>
+                                {currentQuality === q.quality && <Check className="h-4 w-4 text-netflix" />}
+                              </button>
+                            ))}
+                          </div>
+                        )}
+                      </div>
                     )}
 
                     {/* Fullscreen */}
@@ -667,8 +772,8 @@ export default function MoviePlayer({
                   </div>
                 </div>
 
-                {/* Shortcut hint (first 5s) */}
-                <div className={`absolute bottom-16 right-4 z-20 text-[11px] text-white/50 bg-black/60 rounded-lg px-3 py-2 backdrop-blur-sm transition-opacity duration-1000 pointer-events-none ${controlsVisible ? "opacity-100" : "opacity-0"}`}>
+                {/* Shortcut hint — desktop only (overlaps menus on phones) */}
+                <div className={`hidden md:block absolute bottom-16 right-4 z-20 text-[11px] text-white/50 bg-black/60 rounded-lg px-3 py-2 backdrop-blur-sm transition-opacity duration-1000 pointer-events-none ${controlsVisible ? "opacity-100" : "opacity-0"}`}>
                   <span className="font-semibold text-white/80">Shortcuts:</span> Space play · ←→ 5s · JL 10s · F fullscreen · M mute · C subs · 0-9 jump
                 </div>
               </>

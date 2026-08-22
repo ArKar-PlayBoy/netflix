@@ -1,4 +1,5 @@
 import { NextResponse } from "next/server";
+import { safeJson } from "@/lib/http";
 import bcrypt from "bcryptjs";
 import { getCurrentUser } from "@/lib/user-auth";
 import { findUserById, setUserPassword } from "@/lib/db";
@@ -23,12 +24,9 @@ export async function POST(request: Request) {
     const sessionUser = await getCurrentUser();
     if (!sessionUser) return NextResponse.json({ success: false, error: "Unauthorized" }, { status: 401 });
 
-    let body;
-    try {
-      body = await request.json();
-    } catch {
-      return NextResponse.json({ success: false, error: "Invalid JSON body" }, { status: 400 });
-    }
+    const parsed = await safeJson(request);
+    if (!parsed.ok) return parsed.response;
+    const body = parsed.data;
 
     const newPassword = typeof body.newPassword === "string" ? body.newPassword : "";
     if (newPassword.length < 8 || newPassword.length > 128 || !/[a-zA-Z]/.test(newPassword) || !/[0-9]/.test(newPassword)) {

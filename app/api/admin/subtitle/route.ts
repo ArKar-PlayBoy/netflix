@@ -1,7 +1,7 @@
 import { NextResponse } from "next/server";
 import crypto from "crypto";
 import { requireAdmin } from "@/lib/admin-auth";
-import { isR2Configured, getPresignedUploadUrl } from "@/lib/r2";
+import { isR2Configured, getBucket, getR2Client } from "@/lib/r2";
 import { addSubtitle } from "@/lib/db";
 
 const ALLOWED_SUB_EXTENSIONS = [".srt", ".vtt"];
@@ -15,6 +15,31 @@ export async function POST(request: Request) {
       return NextResponse.json({ success: false, error: "R2 storage is not configured" }, { status: 500 });
     }
 
+    const url = new URL(request.url);
+
+    // Proxied text upload: raw VTT body → R2 server-side (ISP-proof).
+    // Subtitles are small (<2MB) so the Vercel body limit is never an issue.
+    if (url.searchParams.get("action") === "put") {
+      const key = url.searchParams.get("key") ?? "";
+      if (!key.startsWith("subs/") || key.includes("..")) {
+        return NextResponse.json({ success: false, error: "Invalid key" }, { status: 400 });
+      }
+      const text = await request.text();
+      if (text.length > 2 * 1024 * 1024) {
+        return NextResponse.json({ success: false, error: "Subtitle too large" }, { status: 413 });
+      }
+      const { PutObjectCommand } = await import("@aws-sdk/client-s3");
+      await getR2Client().send(
+        new PutObjectCommand({
+          Bucket: getBucket(),
+          Key: key,
+          Body: text,
+          ContentType: "text/vtt; charset=utf-8",
+        })
+      );
+      return NextResponse.json({ success: true });
+    }
+
     let body;
     try {
       body = await request.json();
@@ -22,9 +47,9 @@ export async function POST(request: Request) {
       return NextResponse.json({ success: false, error: "Invalid JSON body" }, { status: 400 });
     }
 
-    const action = body.action ?? "presign";
+    const action = body.action ?? "key";
 
-    if (action === "presign") {
+    if (action === "key") {
       const fileName = typeof body.fileName === "string" ? body.fileName : "";
       const ext = fileName.slice(fileName.lastIndexOf(".")).toLowerCase();
       if (!fileName || !ALLOWED_SUB_EXTENSIONS.includes(ext)) {
@@ -35,8 +60,7 @@ export async function POST(request: Request) {
       }
       const rand = crypto.randomBytes(6).toString("hex");
       const key = `subs/${rand}-${fileName.replace(/\.[^.]+$/, "").replace(/[^a-zA-Z0-9._-]+/g, "-").slice(0, 60)}.vtt`;
-      const uploadUrl = await getPresignedUploadUrl(key, "text/vtt");
-      return NextResponse.json({ success: true, data: { key, uploadUrl } });
+      return NextResponse.json({ success: true, data: { key } });
     }
 
     if (action === "attach") {

@@ -1,4 +1,5 @@
 import { NextResponse } from "next/server";
+import { safeJson } from "@/lib/http";
 import bcrypt from "bcryptjs";
 import { findUserByEmailHash, createEmailUser } from "@/lib/db";
 import { hmacHash } from "@/lib/crypto";
@@ -22,12 +23,9 @@ export async function POST(request: Request) {
       }
     }
 
-    let body;
-    try {
-      body = await request.json();
-    } catch {
-      return NextResponse.json({ success: false, error: "Invalid JSON body" }, { status: 400 });
-    }
+    const parsed = await safeJson(request);
+    if (!parsed.ok) return parsed.response;
+    const body = parsed.data;
 
     const email = typeof body.email === "string" ? body.email.trim().toLowerCase() : "";
     const password = typeof body.password === "string" ? body.password : "";

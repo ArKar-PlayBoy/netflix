@@ -20,12 +20,13 @@ export async function hasAdminAccount(): Promise<boolean> {
 }
 function createSignedToken(payload: string): string {
   const signature = crypto.createHmac("sha256", SESSION_SECRET).update(payload).digest("hex");
-  return Buffer.from(`${payload}:${signature}`).toString("base64");
+  // base64url: no '=' padding, no '+'/'/' — safe for every client/proxy
+  return Buffer.from(`${payload}:${signature}`).toString("base64url");
 }
 
 function verifySignedToken(token: string): { ok: boolean; ver: number } {
   try {
-    const decoded = Buffer.from(token, "base64").toString("utf-8");
+    const decoded = Buffer.from(token, "base64url").toString("utf-8");
     const parts = decoded.split(":");
     if (parts.length < 3) return { ok: false, ver: -1 };
     const signature = parts.pop()!;

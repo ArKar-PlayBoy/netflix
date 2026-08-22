@@ -75,21 +75,21 @@ export default function VideosPage() {
     setSubBusy(true);
     setSubMsg("");
     try {
-      // 1. Presign
-      const pRes = await fetch("/api/admin/subtitle", {
+      // 1. Get an unguessable storage key
+      const kRes = await fetch("/api/admin/subtitle", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ action: "presign", fileName: subFile.name }),
+        body: JSON.stringify({ action: "key", fileName: subFile.name }),
       });
-      const pData = await pRes.json();
-      if (!pData.success) throw new Error(pData.error);
-      const { key, uploadUrl } = pData.data;
+      const kData = await kRes.json();
+      if (!kData.success) throw new Error(kData.error);
+      const key: string = kData.data.key;
 
-      // 2. Convert SRT→VTT if needed, upload text
+      // 2. Convert SRT→VTT if needed, upload text THROUGH our server (ISP-proof)
       const raw = await subFile.text();
       const vtt = subFile.name.toLowerCase().endsWith(".srt") ? srtToVtt(raw) : raw;
-      const put = await fetch(uploadUrl, {
-        method: "PUT",
+      const put = await fetch(`/api/admin/subtitle?action=put&key=${encodeURIComponent(key)}`, {
+        method: "POST",
         headers: { "Content-Type": "text/vtt" },
         body: vtt,
       });

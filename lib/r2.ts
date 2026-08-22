@@ -25,6 +25,11 @@ export function isR2Configured(): boolean {
 
 let _r2: S3Client | null = null;
 
+/** Exposed for rare server-side one-shot operations (e.g. subtitle PUT) */
+export function getR2Client(): S3Client {
+  return getR2();
+}
+
 function getR2(): S3Client {
   if (!isR2Configured()) {
     throw new Error("R2 is not configured. Set R2_ACCOUNT_ID, R2_ACCESS_KEY_ID, R2_SECRET_ACCESS_KEY, R2_BUCKET.");
@@ -37,6 +42,13 @@ function getR2(): S3Client {
         accessKeyId: ACCESS_KEY!,
         secretAccessKey: SECRET_KEY!,
       },
+      // Fail FAST on flaky networks — hanging requests are worse than errors
+      // (UI shows retry; callers stay responsive)
+      requestHandler: {
+        requestTimeout: 12_000,
+        connectionTimeout: 5_000,
+      },
+      maxAttempts: 2,
     });
   }
   return _r2;
@@ -177,6 +189,7 @@ export async function abortMultipart(key: string, uploadId: string): Promise<voi
   );
 }
 
+
 export async function headObject(key: string): Promise<{ size: number; contentType?: string; originalName: string | null } | null> {
   try {
     const res = await getR2().send(new HeadObjectCommand({ Bucket: getBucket(), Key: key }));
@@ -217,7 +230,13 @@ export async function getObjectStream(key: string, range?: string): Promise<{
       contentRange: res.ContentRange,
       contentType: res.ContentType,
     };
-  } catch {
-    return null;
+  } catch (err) {
+    // Only a genuinely missing key maps to 404. Network resets (flaky ISP)
+    // must NOT masquerade as 404 — rethrow so the route reports 502 instead.
+    const name = (err as { name?: string })?.name ?? "";
+    const code = (err as { Code?: string })?.Code ?? "";
+    if (name === "NoSuchKey" || code === "NoSuchKey" || name === "NotFound") return null;
+    throw err;
   }
 }
+

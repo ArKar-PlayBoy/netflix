@@ -42,7 +42,7 @@ function sign(payload: string): string {
  *  issued session of that user across all devices. */
 export async function createUserSession(userId: number, sessionVer: number): Promise<void> {
   const payload = `${userId}:${sessionVer}:${Date.now()}`;
-  const token = Buffer.from(`${payload}:${sign(payload)}`).toString("base64");
+  const token = Buffer.from(`${payload}:${sign(payload)}`).toString("base64url");
   const cookieStore = await cookies();
   cookieStore.set(SESSION_COOKIE, token, {
     httpOnly: true,
@@ -61,7 +61,7 @@ export async function getCurrentUser(): Promise<SafeUser | null> {
     const token = cookieStore.get(SESSION_COOKIE)?.value;
     if (!token) return null;
 
-    const decoded = Buffer.from(token, "base64").toString("utf-8");
+    const decoded = Buffer.from(token, "base64url").toString("utf-8");
     const parts = decoded.split(":");
     if (parts.length !== 4) return null;
 

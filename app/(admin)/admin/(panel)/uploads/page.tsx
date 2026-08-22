@@ -12,8 +12,10 @@ type UploadItem = {
 };
 
 const ALLOWED = [".mp4", ".mkv", ".webm", ".avi", ".mov"];
-const CHUNK_SIZE = 8 * 1024 * 1024; // 8MB parts
-const MAX_RETRIES = 3;
+// 8MB direct-to-R2 parts: meets S3 5MiB minimum, fewest requests, and
+// per-part retry already survived a real 864MB upload on a flaky ISP.
+const CHUNK_SIZE = 8 * 1024 * 1024;
+const MAX_RETRIES = 4;
 const CONCURRENCY = 3;
 
 export default function UploadsPage() {
@@ -25,7 +27,7 @@ export default function UploadsPage() {
     setItems((prev) => prev.map((it) => (it.file === file ? { ...it, ...patch } : it)));
   };
 
-  // PUT one chunk straight to R2 with retries; returns the ETag
+  // PUT one chunk straight to R2 (presigned) with retries; returns the ETag
   const putPart = async (
     url: string,
     chunk: Blob,
@@ -58,7 +60,7 @@ export default function UploadsPage() {
         });
       } catch (err) {
         lastErr = err as Error;
-        if (attempt < MAX_RETRIES) await new Promise((r) => setTimeout(r, attempt * 1500));
+        if (attempt < MAX_RETRIES) await new Promise((r) => setTimeout(r, attempt * 2000));
       }
     }
     throw lastErr ?? new Error("Part upload failed");
@@ -73,7 +75,7 @@ export default function UploadsPage() {
       let uploadId: string | null = null;
 
       try {
-        // 1. Create multipart session (BEGIN)
+        // 1. Create multipart session (BEGIN) — server generates unguessable key
         const cRes = await fetch("/api/admin/upload", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
@@ -81,9 +83,10 @@ export default function UploadsPage() {
         });
         const cData = await cRes.json();
         if (!cData.success) throw new Error(cData.error || "Failed to start upload");
-        uploadId = cData.data.uploadId as string;
+        const key: string = cData.data.key;
+        uploadId = cData.data.uploadId;
 
-        // 2. Upload parts (limited concurrency)
+        // 2. Upload parts through our API (ISP-proof), limited concurrency
         const totalParts = Math.max(1, Math.ceil(file.size / CHUNK_SIZE));
         const parts: { ETag: string; PartNumber: number }[] = [];
         let uploadedBytes = 0;
