@@ -14,6 +14,7 @@ type SecEvent = {
   first_seen: string;
   last_seen: string;
   blocked_until: string | null;
+  geo?: { country: string; country_code: string; city: string; isp: string; flag: string } | null;
 };
 
 const TYPE_LABELS: Record<string, { label: string; cls: string }> = {
@@ -156,7 +157,15 @@ export default function SecurityPage() {
                 const banned = e.blocked_until && new Date(e.blocked_until) > new Date();
                 return (
                   <tr key={e.id} className="hover:bg-muted/30">
-                    <td className="px-4 py-3 font-mono">{e.ip}</td>
+                    <td className="px-4 py-3">
+                      <span className="font-mono">{e.ip}</span>
+                      {e.geo && (
+                        <p className="text-xs text-muted-foreground mt-0.5">
+                          {e.geo.flag} {e.geo.city ? `${e.geo.city}, ` : ""}{e.geo.country}
+                          {e.geo.isp && <span className="opacity-60"> · {e.geo.isp}</span>}
+                        </p>
+                      )}
+                    </td>
                     <td className="px-4 py-3">
                       <span className={`px-2 py-0.5 rounded border text-xs font-semibold ${meta.cls}`}>{meta.label}</span>
                     </td>
@@ -222,6 +231,11 @@ export default function SecurityPage() {
                     <span className="font-mono font-semibold">{e.ip}</span>
                     <span className="text-red-500 font-bold">{e.hits} hits</span>
                   </div>
+                  {e.geo && (
+                    <p className="text-xs text-muted-foreground mt-1">
+                      {e.geo.flag} {e.geo.city ? `${e.geo.city}, ` : ""}{e.geo.country}
+                    </p>
+                  )}
                   <p className="text-xs text-muted-foreground mt-1">{e.detail}</p>
                   {e.blocked_until && (
                     <p className="text-xs text-red-500 mt-1 font-medium">

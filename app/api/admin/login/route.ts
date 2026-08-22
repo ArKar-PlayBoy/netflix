@@ -20,6 +20,7 @@ export async function POST(request: Request) {
       );
     }
     const rl = rateLimit(`admin-login:${ip}`, MAX_ATTEMPTS, WINDOW_MS, LOCKOUT_MS);
+    if (!rl.allowed) { void recordSecurityEvent(ip, "bruteforce", "Login flood (lockout)"); }
     if (!rl.allowed) {
       return NextResponse.json(
         { success: false, error: `Too many attempts. Try again in ${Math.ceil(rl.retryAfterSec / 60)} minute(s).`, message: ATTACKER_MESSAGE },

@@ -284,6 +284,7 @@ function ensureSchema(): Promise<void> {
           UNIQUE(ip, type)
         );
         CREATE INDEX IF NOT EXISTS idx_sec_last ON security_events(last_seen DESC);
+        ALTER TABLE security_events ADD COLUMN IF NOT EXISTS geo TEXT DEFAULT NULL;
       `);
     })();
   }
@@ -869,12 +870,34 @@ export type SecurityEvent = {
   first_seen: string;
   last_seen: string;
   blocked_until: string | null;
+  geo?: GeoInfo | null;
 };
+
+export type GeoInfo = {
+  country: string;
+  country_code: string;
+  city: string;
+  isp: string;
+  flag: string;
+};
+
+/** Cache geolocation onto an event row (one-time lookup per attacker) */
+export async function setSecurityGeo(id: number, geo: GeoInfo): Promise<void> {
+  await ensureSchema();
+  await getSql()`
+    UPDATE security_events
+    SET geo = ${getSql().json(geo)}::jsonb
+    WHERE id = ${id}
+  `;
+}
 
 /** Record an offense; auto-escalates bans:
  *  bruteforce: ignored below 10 hits -> 10+ hits -> 24h ban | rate_limit: 10 -> 15min */
 export async function recordSecurityEvent(ip: string, type: string, detail: string): Promise<void> {
   await ensureSchema();
+  // Never ban or track private/local addresses (dev self-lockout protection)
+  const { isPublicIp } = await import("./ip-geo");
+  if (!isPublicIp(ip)) return;
   const rows = await getSql()<{ hits: number }[]>`
     INSERT INTO security_events (ip, type, detail)
     VALUES (${ip}, ${type}, ${detail})
@@ -905,6 +928,8 @@ export async function recordSecurityEvent(ip: string, type: string, detail: stri
 
 export async function isIpBlocked(ip: string): Promise<boolean> {
   await ensureSchema();
+  const { isPublicIp } = await import("./ip-geo");
+  if (!isPublicIp(ip)) return false;
   const rows = await getSql()<{ id: number }[]>`
     SELECT 1 AS id FROM security_events
     WHERE ip = ${ip} AND blocked_until > now()
@@ -916,9 +941,9 @@ export async function isIpBlocked(ip: string): Promise<boolean> {
 export async function getSecurityEvents(sinceId: number = 0, limit: number = 50) {
   await ensureSchema();
   const rows = await getSql()<
-    { id: number; ip: string; type: string; detail: string; hits: number; first_seen: Date; last_seen: Date; blocked_until: Date | null }[]
+    { id: number; ip: string; type: string; detail: string; hits: number; first_seen: Date; last_seen: Date; blocked_until: Date | null; geo: GeoInfo | string | null }[]
   >`
-    SELECT id, ip, type, detail, hits, first_seen, last_seen, blocked_until
+    SELECT id, ip, type, detail, hits, first_seen, last_seen, blocked_until, geo
     FROM security_events WHERE id > ${sinceId}
     ORDER BY last_seen DESC LIMIT ${limit}
   `;
@@ -928,6 +953,12 @@ export async function getSecurityEvents(sinceId: number = 0, limit: number = 50)
   return {
     events: rows.map((r) => ({
       ...r,
+      geo:
+        Array.isArray(r.geo)
+          ? r.geo
+          : typeof r.geo === "string"
+            ? JSON.parse(r.geo)
+            : null,
       first_seen: iso(r.first_seen)!,
       last_seen: iso(r.last_seen)!,
       blocked_until: iso(r.blocked_until),
