@@ -272,6 +272,18 @@ function ensureSchema(): Promise<void> {
         ALTER TABLE videos ADD COLUMN IF NOT EXISTS subtitles JSONB DEFAULT '[]'::jsonb;
         ALTER TABLE videos ADD COLUMN IF NOT EXISTS media_type TEXT DEFAULT 'movie';
         ALTER TABLE users ADD COLUMN IF NOT EXISTS session_ver INTEGER NOT NULL DEFAULT 0;
+        CREATE TABLE IF NOT EXISTS security_events (
+          id SERIAL PRIMARY KEY,
+          ip TEXT NOT NULL,
+          type TEXT NOT NULL,
+          detail TEXT DEFAULT '',
+          hits INTEGER NOT NULL DEFAULT 1,
+          first_seen TIMESTAMPTZ DEFAULT now(),
+          last_seen TIMESTAMPTZ DEFAULT now(),
+          blocked_until TIMESTAMPTZ,
+          UNIQUE(ip, type)
+        );
+        CREATE INDEX IF NOT EXISTS idx_sec_last ON security_events(last_seen DESC);
       `);
     })();
   }
@@ -844,6 +856,89 @@ export async function getEpisodeById(episodeId: number): Promise<EpisodeRecord |
   const r = rows[0];
   if (!r) return null;
   return { ...r, qualities: typeof r.qualities === "string" ? JSON.parse(r.qualities) : r.qualities };
+}
+
+// ===== Security events (attack detection + auto-ban) =====
+
+export type SecurityEvent = {
+  id: number;
+  ip: string;
+  type: string;
+  detail: string;
+  hits: number;
+  first_seen: string;
+  last_seen: string;
+  blocked_until: string | null;
+};
+
+/** Record an offense; auto-escalates bans:
+ *  bruteforce: ignored below 10 hits -> 10+ hits -> 24h ban | rate_limit: 10 -> 15min */
+export async function recordSecurityEvent(ip: string, type: string, detail: string): Promise<void> {
+  await ensureSchema();
+  const rows = await getSql()<{ hits: number }[]>`
+    INSERT INTO security_events (ip, type, detail)
+    VALUES (${ip}, ${type}, ${detail})
+    ON CONFLICT (ip, type) DO UPDATE SET
+      hits = security_events.hits + 1,
+      detail = EXCLUDED.detail,
+      last_seen = now()
+    RETURNING hits
+  `;
+  const hits = rows[0]?.hits ?? 1;
+
+  let banMinutes = 0;
+  if (type === "bruteforce" && hits >= 10) {
+    banMinutes = 24 * 60;
+  } else if (type === "rate_limit" && hits >= 10) {
+    banMinutes = 15;
+  }
+
+  if (banMinutes > 0) {
+    await getSql()`
+      UPDATE security_events
+      SET blocked_until = now() + (${banMinutes} * interval '1 minute')
+      WHERE ip = ${ip} AND type = ${type}
+    `;
+    await addAuditLog("security.ban", `IP ${ip} banned ${banMinutes}min (${type}, ${hits} hits)`);
+  }
+}
+
+export async function isIpBlocked(ip: string): Promise<boolean> {
+  await ensureSchema();
+  const rows = await getSql()<{ id: number }[]>`
+    SELECT 1 AS id FROM security_events
+    WHERE ip = ${ip} AND blocked_until > now()
+    LIMIT 1
+  `;
+  return rows.length > 0;
+}
+
+export async function getSecurityEvents(sinceId: number = 0, limit: number = 50) {
+  await ensureSchema();
+  const rows = await getSql()<
+    { id: number; ip: string; type: string; detail: string; hits: number; first_seen: Date; last_seen: Date; blocked_until: Date | null }[]
+  >`
+    SELECT id, ip, type, detail, hits, first_seen, last_seen, blocked_until
+    FROM security_events WHERE id > ${sinceId}
+    ORDER BY last_seen DESC LIMIT ${limit}
+  `;
+  const totalRows = await getSql()<{ count: number }[]>`
+    SELECT COUNT(*)::int AS count FROM security_events WHERE id > ${sinceId}
+  `;
+  return {
+    events: rows.map((r) => ({
+      ...r,
+      first_seen: iso(r.first_seen)!,
+      last_seen: iso(r.last_seen)!,
+      blocked_until: iso(r.blocked_until),
+    })),
+    total: totalRows[0]?.count ?? 0,
+  };
+}
+
+export async function clearSecurityEvents(): Promise<void> {
+  await ensureSchema();
+  await getSql()`DELETE FROM security_events`;
 }
 
 // ===== Session revocation =====

@@ -12,6 +12,7 @@ import {
   Star,
   History,
   UploadCloud,
+  Shield,
   Menu,
   X,
   Clapperboard,
@@ -26,6 +27,8 @@ const NAV_ITEMS = [
   { href: "/admin/link", label: "Link", icon: Link2 },
   { href: "/admin/featured", label: "Featured", icon: Star },
   { href: "/admin/audit", label: "Audit Logs", icon: History },
+  { href: "/admin/security", label: "Security", icon: Shield },
+  { href: "/admin/settings", label: "Settings", icon: Settings },
   { href: "/admin/settings", label: "Settings", icon: Settings },
 ];
 
