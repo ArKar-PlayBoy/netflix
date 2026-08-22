@@ -586,6 +586,7 @@ export default function MoviePlayer({
                   }}
                   onPlay={() => { setIsPlaying(true); setEverPlayed(true); setStalling(false); setLoading(false); showControls(); }}
                   onPause={() => { setIsPlaying(false); saveProgress(); showControls(); }}
+                  onVolumeChange={(e) => { setVolume(e.currentTarget.volume); setMuted(e.currentTarget.muted); }}
                   onWaiting={() => { if (everPlayed) { setStalling(true); } else { setLoading(true); } }}
                   onPlaying={() => setLoading(false)}
                   onCanPlay={() => { setLoading(false); if (everPlayed) setStalling(false); }}
@@ -703,7 +704,7 @@ export default function MoviePlayer({
                           setVolume(val);
                           setMuted(val === 0);
                         }}
-                        className="w-0 group-hover/vol:w-20 transition-all duration-300 accent-white h-1 cursor-pointer"
+                        className="hidden sm:block w-0 group-hover/vol:w-20 transition-all duration-300 accent-white h-1 cursor-pointer"
                         aria-label="Volume"
                       />
                     </div>
