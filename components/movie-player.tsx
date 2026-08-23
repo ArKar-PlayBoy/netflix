@@ -3,9 +3,14 @@
 import { useState, useCallback, useEffect, useRef } from "react";
 import {
   Play, X, AlertCircle, Check, Wifi, Subtitles, Pause,
-  Volume2, VolumeX, Maximize, Minimize, RotateCcw, RotateCw, Gauge,
+  Volume2, VolumeX, Maximize, Minimize, RotateCcw, RotateCw,
 } from "lucide-react";
 import { getRecommendedQuality } from "@/lib/network";
+import { useProgressSync } from "@/components/player/use-progress-sync";
+import SubtitleRenderer from "@/components/player/subtitle-renderer";
+import { useAdaptiveQuality } from "@/components/player/use-adaptive-quality";
+import { usePlayerGestures } from "@/components/player/use-gestures";
+import { useFullscreen } from "@/components/player/use-fullscreen";
 
 type QualityOption = { quality: string; file: string };
 type SubtitleOption = { lang: string; label: string; file: string };
@@ -86,10 +91,9 @@ export default function MoviePlayer({
   });
   const [showQualityMenu, setShowQualityMenu] = useState(false);
   const [showSpeedMenu, setShowSpeedMenu] = useState(false);
-  const [subtitleOn, setSubtitleOn] = useState(() => {
-    if (typeof window !== "undefined") return localStorage.getItem("subs-enabled") !== "off";
-    return true;
-  });
+  const [showSubsMenu, setShowSubsMenu] = useState(false);
+  // Active subtitle language (null = off); persisted globally, mm → en smart default
+  const [activeSub, setActiveSub] = useState<string | null>(null);
 
   // Custom control state
   const [isPlaying, setIsPlaying] = useState(false);
@@ -99,99 +103,37 @@ export default function MoviePlayer({
   const [volume, setVolume] = useState(1);
   const [muted, setMuted] = useState(false);
   const [speed, setSpeed] = useState(1);
-  const [isFullscreen, setIsFullscreen] = useState(false);
   const [controlsVisible, setControlsVisible] = useState(true);
   const [seekPreview, setSeekPreview] = useState<{ pct: number; time: number } | null>(null);
+  const [everPlayed, setEverPlayed] = useState(false);
+  const [stalling, setStalling] = useState(false);
+  // Position the player auto-resumed from (null = started fresh / no banner)
+  const [resumedFrom, setResumedFrom] = useState<number | null>(null);
 
   const videoRef = useRef<HTMLVideoElement>(null);
   const containerRef = useRef<HTMLDivElement>(null);
   const qualityMenuRef = useRef<HTMLDivElement>(null);
   const speedMenuRef = useRef<HTMLDivElement>(null);
-  const lastSavedRef = useRef(0);
-  const resumeAtRef = useRef<number | null>(null);
   const hideTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const seekingRef = useRef(false);
-  const lastTapRef = useRef<{ time: number; x: number } | null>(null);
-  const [seekRipple, setSeekRipple] = useState<{ side: "l" | "r"; id: number } | null>(null);
-  const [reloadNonce, setReloadNonce] = useState(0);
-  const [everPlayed, setEverPlayed] = useState(false);
-  const [stalling, setStalling] = useState(false);
-  const [longPress2x, setLongPress2x] = useState(false);
-  const longPressTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const longPressActiveRef = useRef(false);
-  const suppressTapRef = useRef(false);
-  const touchStartRef = useRef<{ x: number; y: number } | null>(null);
+  const seekBarRef = useRef<HTMLDivElement>(null);
+  const scrubbingRef = useRef(false);
+  const subsMenuRef = useRef<HTMLDivElement>(null);
 
-  const startLongPress = (e: React.TouchEvent) => {
-    const t = e.touches[0];
-    touchStartRef.current = { x: t.clientX, y: t.clientY };
-    longPressTimerRef.current = setTimeout(() => {
-      const v = videoRef.current;
-      if (v && !v.paused) {
-        v.playbackRate = 2;
-        longPressActiveRef.current = true;
-        setLongPress2x(true);
-      }
-    }, 450);
-  };
+  // Progress persistence (resume fetch + throttled saves) — extracted hook
+  const { resumeAtRef, saveProgress, resetProgress } = useProgressSync(
+    movieId,
+    showModal && hasLocalVideo,
+    () => videoRef.current,
+    setResumedFrom
+  );
 
-  const cancelLongPress = (e?: React.TouchEvent) => {
-    if (longPressTimerRef.current) { clearTimeout(longPressTimerRef.current); longPressTimerRef.current = null; }
-    // Moved finger = not a hold
-    if (e && touchStartRef.current) {
-      const t = e.touches[0];
-      if (Math.abs(t.clientX - touchStartRef.current.x) > 12 || Math.abs(t.clientY - touchStartRef.current.y) > 12) {
-        if (!longPressActiveRef.current) { longPressTimerRef.current = null; }
-      }
-    }
-  };
-
-  const endLongPress = () => {
-    if (longPressTimerRef.current) { clearTimeout(longPressTimerRef.current); longPressTimerRef.current = null; }
-    if (longPressActiveRef.current) {
-      const v = videoRef.current;
-      if (v) v.playbackRate = speed;
-      longPressActiveRef.current = false;
-      setLongPress2x(false);
-      suppressTapRef.current = true;
-      setTimeout(() => { suppressTapRef.current = false; }, 350);
-    }
-  };
-  const menuOpenRef = useRef(false);
-  menuOpenRef.current = showQualityMenu || showSpeedMenu;
+  // Fullscreen via shared hook — native API with webkit fallback, fake-fullscreen on iPhone
+  const { isActive: fsActive, fakeFs: fsFake, toggle: toggleFs, exit: exitFs } = useFullscreen(() => containerRef.current);
 
   useEffect(() => {
     const { quality } = getRecommendedQuality();
     setAutoQuality(quality);
   }, []);
-
-  // Resume position
-  useEffect(() => {
-    if (!showModal || !hasLocalVideo) return;
-    let cancelled = false;
-    fetch(`/api/progress?movieId=${movieId}`)
-      .then((r) => r.json())
-      .then((d) => {
-        if (!cancelled && d.success && d.data?.progress?.position_seconds > 5) {
-          resumeAtRef.current = d.data.progress.position_seconds;
-        }
-      })
-      .catch(() => {});
-    return () => { cancelled = true; };
-  }, [showModal, hasLocalVideo, movieId]);
-
-  const saveProgress = useCallback(() => {
-    const v = videoRef.current;
-    if (!v || !v.duration || isNaN(v.duration)) return;
-    const now = Date.now();
-    if (now - lastSavedRef.current < 15000) return;
-    lastSavedRef.current = now;
-    fetch("/api/progress", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ movieId, position: v.currentTime, duration: v.duration }),
-    }).catch(() => {});
-  }, [movieId]);
 
   const getSelectedFile = useCallback(() => {
     const effective = currentQuality === "auto" ? autoQuality : currentQuality;
@@ -223,38 +165,41 @@ export default function MoviePlayer({
     saveProgress();
     setEverPlayed(false);
     setStalling(false);
+    setResumedFrom(null);
     setShowModal(false);
     document.body.style.overflow = "";
     setShowQualityMenu(false);
     setShowSpeedMenu(false);
-    if (document.fullscreenElement) document.exitFullscreen().catch(() => {});
+    setShowSubsMenu(false);
+    exitFs();
     videoRef.current?.pause();
-  }, [saveProgress]);
+  }, [saveProgress, exitFs]);
 
   useEffect(() => () => { document.body.style.overflow = ""; }, []);
 
   useEffect(() => {
-    const onEsc = (e: KeyboardEvent) => { if (e.key === "Escape" && showModal && !document.fullscreenElement) closeModal(); };
+    const onEsc = (e: KeyboardEvent) => {
+    if (!showModal) return;
+    if (e.key === "Escape") {
+      if (fsFake) exitFs();
+      else if (!document.fullscreenElement) closeModal();
+    }
+  };
     window.addEventListener("keydown", onEsc);
-    return () => window.removeEventListener("keydown", onEsc);
-  }, [showModal, closeModal]);
-
-  useEffect(() => {
-    const onFs = () => setIsFullscreen(!!document.fullscreenElement);
-    document.addEventListener("fullscreenchange", onFs);
-    return () => document.removeEventListener("fullscreenchange", onFs);
-  }, []);
+    return () =>     window.removeEventListener("keydown", onEsc);
+  }, [showModal, closeModal, fsFake, exitFs]);
 
   // Close menus on outside click
   useEffect(() => {
-    if (!showQualityMenu && !showSpeedMenu) return;
-    const handler = (e: MouseEvent) => {
-      if (qualityMenuRef.current && !qualityMenuRef.current.contains(e.target as Node)) setShowQualityMenu(false);
-      if (speedMenuRef.current && !speedMenuRef.current.contains(e.target as Node)) setShowSpeedMenu(false);
-    };
+  if (!showQualityMenu && !showSpeedMenu && !showSubsMenu) return;
+  const handler = (e: MouseEvent) => {
+    if (qualityMenuRef.current && !qualityMenuRef.current.contains(e.target as Node)) setShowQualityMenu(false);
+    if (speedMenuRef.current && !speedMenuRef.current.contains(e.target as Node)) setShowSpeedMenu(false);
+    if (subsMenuRef.current && !subsMenuRef.current.contains(e.target as Node)) setShowSubsMenu(false);
+  };
     document.addEventListener("mousedown", handler);
     return () => document.removeEventListener("mousedown", handler);
-  }, [showQualityMenu, showSpeedMenu]);
+  }, [showQualityMenu, showSpeedMenu, showSubsMenu]);
 
   // ===== Player actions =====
   const togglePlay = useCallback(() => {
@@ -286,24 +231,52 @@ export default function MoviePlayer({
     setMuted(v.muted);
   }, []);
 
-  const toggleFullscreen = useCallback(() => {
-    if (document.fullscreenElement) document.exitFullscreen().catch(() => {});
-    else containerRef.current?.requestFullscreen().catch(() => {});
+  // Resolve initial subtitle language: saved pref → mm → en → first available
+  useEffect(() => {
+    if (subtitles.length === 0) {
+      setActiveSub(null);
+      return;
+    }
+    const saved = localStorage.getItem("subs-lang");
+    const pick =
+      subtitles.find((s) => s.lang === saved) ??
+      subtitles.find((s) => s.lang === "mm") ??
+      subtitles.find((s) => s.lang === "en") ??
+      subtitles[0];
+    setActiveSub(pick.lang);
+  }, [subtitles]);
+
+  const selectSubtitle = useCallback((lang: string | null) => {
+    setActiveSub(lang);
+    if (lang) localStorage.setItem("subs-lang", lang);
+    setShowSubsMenu(false);
   }, []);
 
-  const toggleSubtitles = useCallback(() => {
-    const next = !subtitleOn;
-    setSubtitleOn(next);
-    localStorage.setItem("subs-enabled", next ? "on" : "off");
+  // "c" cycles: current → next track → off → first
+  const cycleSubtitles = useCallback(() => {
+    if (subtitles.length === 0) return;
+    const options: (string | null)[] = [...subtitles.map((s) => s.lang), null];
+    const next = options[(options.indexOf(activeSub) + 1) % options.length];
+    selectSubtitle(next);
+  }, [subtitles, activeSub, selectSubtitle]);
+
+  // "Start from beginning" — seek 0 first so resetProgress persists ~0, not the stale resume point
+  const restartFromBeginning = useCallback(() => {
     const v = videoRef.current;
     if (v) {
-      for (const t of v.textTracks) t.mode = "hidden";
-      if (next) {
-        const mm = Array.from(v.textTracks).find((t) => t.language === "mm") ?? v.textTracks[0];
-        if (mm) mm.mode = "showing";
-      }
+      v.currentTime = 0;
+      if (v.paused) v.play().catch(() => {});
     }
-  }, [subtitleOn]);
+    setResumedFrom(null);
+    resetProgress();
+  }, [resetProgress]);
+
+  // Resume banner is an FYI, not a modal — auto-dismiss
+  useEffect(() => {
+    if (resumedFrom == null) return;
+    const t = setTimeout(() => setResumedFrom(null), 8000);
+    return () => clearTimeout(t);
+  }, [resumedFrom]);
 
   const setPlaybackSpeed = useCallback((s: number) => {
     const v = videoRef.current;
@@ -330,7 +303,11 @@ export default function MoviePlayer({
     }
   }, [movieId, token, qualities, autoQuality]);
 
-  // ===== Keyboard shortcuts =====
+  // ===== Keyboard shortcuts (desktop) — every action also has an on-screen button =====
+  // space/k play·pause · ←/→ seek 5s · j/l seek 10s · ↑/↓ volume · m mute
+  // f fullscreen · c subtitles · >/. speed up · </, speed down · 0–9 jump to %
+  // Laptop media keys: ▶/⏸ (MediaPlayPause), ⏭ +10s, ⏮ −10s
+  // Limitation: keys never fire while focus is inside a cross-origin embed iframe.
   useEffect(() => {
     if (!showModal || !hasLocalVideo) return;
     const handler = (e: KeyboardEvent) => {
@@ -344,8 +321,11 @@ export default function MoviePlayer({
         case "arrowup": e.preventDefault(); changeVolume(0.1); break;
         case "arrowdown": e.preventDefault(); changeVolume(-0.1); break;
         case "m": toggleMute(); break;
-        case "f": toggleFullscreen(); break;
-        case "c": toggleSubtitles(); break;
+        case "f": toggleFs(); break;
+        case "c": cycleSubtitles(); break;
+        case "mediaplaypause": e.preventDefault(); togglePlay(); break;
+        case "mediatracknext": e.preventDefault(); seekBy(10); break;
+        case "mediatrackprevious": e.preventDefault(); seekBy(-10); break;
         case ">": case ".": { const i = SPEEDS.indexOf(speed); if (i < SPEEDS.length - 1) setPlaybackSpeed(SPEEDS[i + 1]); break; }
         case "<": case ",": { const i = SPEEDS.indexOf(speed); if (i > 0) setPlaybackSpeed(SPEEDS[i - 1]); break; }
         default:
@@ -358,9 +338,12 @@ export default function MoviePlayer({
     window.addEventListener("keydown", handler);
     return () => window.removeEventListener("keydown", handler);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [showModal, hasLocalVideo, speed, subtitleOn, togglePlay, seekBy, changeVolume, toggleMute, toggleFullscreen, toggleSubtitles, setPlaybackSpeed]);
+  }, [showModal, hasLocalVideo, speed, cycleSubtitles, togglePlay, seekBy, changeVolume, toggleMute, toggleFs, setPlaybackSpeed]);
 
   // Auto-hide controls (never while a menu is open — that was "vanishing selection" bug)
+  const menuOpenRef = useRef(false);
+  menuOpenRef.current = showQualityMenu || showSpeedMenu || showSubsMenu;
+
   const showControls = useCallback(() => {
     setControlsVisible(true);
     if (hideTimerRef.current) clearTimeout(hideTimerRef.current);
@@ -369,97 +352,28 @@ export default function MoviePlayer({
     }, 3000);
   }, []);
 
-  // ===== Mobile: tap / double-tap seek (YouTube-style) =====
-  const handleVideoTap = useCallback((e: React.MouseEvent<HTMLDivElement>) => {
-    const now = Date.now();
-    const rect = e.currentTarget.getBoundingClientRect();
-    const x = e.clientX - rect.left;
-    const last = lastTapRef.current;
+  // ===== Gestures (hold-2x, double-tap seek, tap controls) — extracted hook =====
+  const gestures = usePlayerGestures({
+    videoRef,
+    seekBy,
+    togglePlay,
+    showControls,
+    hideControls: () => setControlsVisible(false),
+    controlsVisible,
+    speed,
+  });
 
-    if (last && now - last.time < 300) {
-      // Double tap — seek ±10s based on tap side
-      const side: "l" | "r" = x < rect.width / 2 ? "l" : "r";
-      seekBy(side === "l" ? -10 : 10);
-      setSeekRipple({ side, id: now });
-      setTimeout(() => setSeekRipple(null), 500);
-      lastTapRef.current = null;
-    } else {
-      lastTapRef.current = { time: now, x };
-      setTimeout(() => {
-        if (lastTapRef.current && Date.now() - lastTapRef.current.time >= 300) {
-          // Mobile pattern: tap toggles control visibility.
-          // Desktop keeps click = play/pause.
-          const canHover =
-            typeof window !== "undefined" &&
-            window.matchMedia("(hover: hover)").matches;
-
-          if (!controlsVisible) {
-            showControls();
-          } else if (canHover) {
-            togglePlay();
-          } else {
-            setControlsVisible(false);
-          }
-          lastTapRef.current = null;
-        }
-      }, 300);
-    }
-  }, [controlsVisible, seekBy, showControls, togglePlay]);
-
-  // ===== Adaptive quality (Auto mode only) =====
-  // Watches buffer health: stalls → step DOWN; sustained headroom → step UP.
-  const LADDER = ["480p", "720p", "1080p", "4K"];
-  const lastSwitchRef = useRef(0);
-  const stableChecksRef = useRef(0);
-  const bufferedAheadRef = useRef(0);
-
-  useEffect(() => {
-    if (!showModal || !hasLocalVideo || currentQuality !== "auto") return;
-    const id = setInterval(() => {
-      const v = videoRef.current;
-      if (!v || v.paused || !v.duration) return;
-
-      let ahead = 0;
-      for (let i = 0; i < v.buffered.length; i++) {
-        if (v.buffered.start(i) <= v.currentTime && v.buffered.end(i) >= v.currentTime) {
-          ahead = v.buffered.end(i) - v.currentTime;
-          break;
-        }
-      }
-      bufferedAheadRef.current = ahead;
-
-      const now = Date.now();
-      if (now - lastSwitchRef.current < 8000) return; // no flapping
-
-      const eff = currentQuality === "auto" ? autoQuality : currentQuality;
-      const idx = LADDER.indexOf(eff);
-      if (idx === -1) return;
-
-      // Struggling: less than 6s ahead → drop a level
-      if (ahead < 6 && idx > 0) {
-        switchQuality(LADDER[idx - 1]);
-        setCurrentQuality("auto");
-        lastSwitchRef.current = now;
-        stableChecksRef.current = 0;
-        return;
-      }
-
-      // Healthy: 25s+ ahead twice in a row → try upgrading
-      if (ahead > 25 && idx < LADDER.length - 1) {
-        stableChecksRef.current++;
-        if (stableChecksRef.current >= 2) {
-          switchQuality(LADDER[idx + 1]);
-          setCurrentQuality("auto");
-          lastSwitchRef.current = now;
-          stableChecksRef.current = 0;
-        }
-      } else {
-        stableChecksRef.current = 0;
-      }
-    }, 5000);
-    return () => clearInterval(id);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [showModal, hasLocalVideo, currentQuality, autoQuality, qualities]);
+  // ===== Adaptive quality (Auto mode only) — extracted hook =====
+  useAdaptiveQuality({
+    active: showModal && hasLocalVideo,
+    autoMode: currentQuality === "auto",
+    videoRef,
+    autoQuality,
+    onAutoSwitch: (next) => {
+      switchQuality(next);
+      setCurrentQuality("auto");
+    },
+  });
 
   const streamUrl = token
     ? `/api/stream/${movieId}?token=${token}&file=${encodeURIComponent(getSelectedFile())}`
@@ -470,11 +384,45 @@ export default function MoviePlayer({
   const progressPct = duration ? (currentTime / duration) * 100 : 0;
   const bufferedPct = duration ? (buffered / duration) * 100 : 0;
 
-  const handleSeek = (e: React.MouseEvent<HTMLDivElement>) => {
-    const rect = e.currentTarget.getBoundingClientRect();
-    const pct = Math.max(0, Math.min(1, (e.clientX - rect.left) / rect.width));
+  // ===== Seek scrubbing — pointer-based so touch can drag (YouTube-style) =====
+  const pctFromClientX = (clientX: number): number => {
+    const el = seekBarRef.current;
+    if (!el || !duration) return 0;
+    const rect = el.getBoundingClientRect();
+    return Math.max(0, Math.min(1, (clientX - rect.left) / rect.width));
+  };
+
+  const onSeekPointerDown = (e: React.PointerEvent<HTMLDivElement>) => {
+    if (!duration) return;
+    e.currentTarget.setPointerCapture(e.pointerId);
+    scrubbingRef.current = true;
+    const pct = pctFromClientX(e.clientX);
+    setSeekPreview({ pct: pct * 100, time: pct * duration });
+  };
+
+  const onSeekPointerMove = (e: React.PointerEvent<HTMLDivElement>) => {
+    if (scrubbingRef.current) {
+      const pct = pctFromClientX(e.clientX);
+      setSeekPreview({ pct: pct * 100, time: pct * duration });
+      return;
+    }
+    if (e.pointerType === "mouse") {
+      const pct = pctFromClientX(e.clientX);
+      setSeekPreview({ pct: pct * 100, time: pct * duration });
+    }
+  };
+
+  const onSeekPointerUp = (e: React.PointerEvent<HTMLDivElement>) => {
+    if (!scrubbingRef.current) return;
+    scrubbingRef.current = false;
+    const pct = pctFromClientX(e.clientX);
     const v = videoRef.current;
     if (v && duration) v.currentTime = pct * duration;
+    setSeekPreview(null);
+  };
+
+  const onSeekPointerLeave = () => {
+    if (!scrubbingRef.current) setSeekPreview(null);
   };
 
   return (
@@ -495,7 +443,7 @@ export default function MoviePlayer({
             className="relative w-full aspect-video h-full sm:h-auto sm:max-w-5xl bg-black sm:rounded-lg overflow-hidden shadow-2xl group/player"
             onClick={(e) => e.stopPropagation()}
             onMouseMove={() => { if (hasLocalVideo) showControls(); }}
-            onPointerDown={() => { lastTapRef.current = null; if (hasLocalVideo) showControls(); }}
+            onPointerDown={() => { gestures.resetDoubleTap(); if (hasLocalVideo) showControls(); }}
           >
             {/* Top bar */}
             <div className={`absolute top-0 left-0 right-0 z-20 flex items-center justify-between px-4 py-3 bg-gradient-to-b from-black/80 to-transparent transition-opacity duration-300 ${hasLocalVideo && !controlsVisible ? "opacity-0" : "opacity-100"}`}>
@@ -556,7 +504,7 @@ export default function MoviePlayer({
               <div className="absolute inset-0 flex flex-col items-center justify-center bg-black z-10 gap-4 px-6">
                 <AlertCircle className="h-12 w-12 text-red-500" />
                 <p className="text-white font-medium">Unable to load video</p>
-                    <button onClick={async () => { setLoading(true); setTokenError(false); await fetchToken(true); setReloadNonce((n) => n + 1); }} className="px-4 py-2 bg-primary text-primary-foreground rounded-lg text-sm hover:opacity-90 transition">Retry</button>
+                    <button onClick={async () => { setLoading(true); setTokenError(false); await fetchToken(true); }} className="px-4 py-2 bg-primary text-primary-foreground rounded-lg text-sm hover:opacity-90 transition">Retry</button>
               </div>
             )}
 
@@ -575,6 +523,7 @@ export default function MoviePlayer({
                     setDuration(e.currentTarget.duration);
                     if (resumeAtRef.current && resumeAtRef.current > 5) {
                       e.currentTarget.currentTime = resumeAtRef.current;
+                      setResumedFrom(resumeAtRef.current);
                       resumeAtRef.current = null;
                     }
                     e.currentTarget.volume = volume;
@@ -596,33 +545,37 @@ export default function MoviePlayer({
                     setLoading(false);
                   }}
                 >
-                  {subtitles.map((sub) => (
-                    <track
-                      key={sub.lang}
-                      kind="subtitles"
-                      src={`/api/subtitle/${movieId}?token=${token}&file=${encodeURIComponent(sub.file)}`}
-                      srcLang={sub.lang}
-                      label={sub.label}
-                      default={sub.lang === "mm" && subtitleOn}
-                    />
-                  ))}
                 </video>
+
+                {/* Custom caption overlay — replaces native <track> for identical rendering everywhere */}
+                {activeSub && token && (() => {
+                  const active = subtitles.find((s) => s.lang === activeSub);
+                  return active ? (
+                    <SubtitleRenderer
+                      movieId={movieId}
+                      token={token}
+                      file={active.file}
+                      currentTime={currentTime}
+                      controlsVisible={controlsVisible}
+                    />
+                  ) : null;
+                })()}
 
                 {/* Tap surface: double-tap sides seek, single tap toggles controls, hold = 2x */}
                 <div
                   className="absolute inset-0 z-[5] touch-manipulation select-none"
-                  onClick={(e) => { if (suppressTapRef.current) { e.stopPropagation(); return; } handleVideoTap(e); }}
-                  onTouchStart={startLongPress}
-                  onTouchMove={cancelLongPress}
-                  onTouchEnd={() => endLongPress()}
+                  onClick={(e) => { if (gestures.consumeSuppressedTap()) { e.stopPropagation(); return; } gestures.handleSurfaceTap(e); }}
+                  onTouchStart={gestures.startLongPress}
+                  onTouchMove={gestures.cancelLongPress}
+                  onTouchEnd={() => gestures.endLongPress()}
                 >
                   {/* Seek ripples */}
-                  {seekRipple && (
+                  {gestures.seekRipple && (
                     <div
-                      className={`absolute inset-y-0 ${seekRipple.side === "l" ? "left-0" : "right-0"} w-1/2 bg-white/10 flex items-center justify-center animate-[ripple_0.5s_ease-out]`}
+                      className={`absolute inset-y-0 ${gestures.seekRipple.side === "l" ? "left-0" : "right-0"} w-1/2 bg-white/10 flex items-center justify-center animate-[ripple_0.5s_ease-out]`}
                     >
                       <span className="flex flex-col items-center gap-1 text-white">
-                        {seekRipple.side === "l" ? <RotateCcw className="h-8 w-8" /> : <RotateCw className="h-8 w-8" />}
+                        {gestures.seekRipple.side === "l" ? <RotateCcw className="h-8 w-8" /> : <RotateCw className="h-8 w-8" />}
                         <span className="text-sm font-bold">10s</span>
                       </span>
                     </div>
@@ -630,9 +583,29 @@ export default function MoviePlayer({
                 </div>
 
                 {/* 2x hold indicator */}
-                {longPress2x && (
+                {gestures.longPress2x && (
                   <div className="absolute bottom-24 left-1/2 -translate-x-1/2 z-30 px-4 py-1.5 rounded-full bg-black/70 backdrop-blur-sm text-white text-sm font-bold flex items-center gap-1.5">
                     <Play className="h-4 w-4 fill-current" /> 2x
+                  </div>
+                )}
+
+                {/* Resumed-from banner — tells the viewer why playback didn't start at 0 */}
+                {resumedFrom != null && !gestures.longPress2x && (
+                  <div className="absolute bottom-24 left-1/2 -translate-x-1/2 z-30 flex items-center gap-2.5 rounded-full bg-black/70 backdrop-blur-sm pl-4 pr-1.5 py-1.5 text-white text-sm shadow-lg">
+                    <span className="whitespace-nowrap">Resumed from {fmt(resumedFrom)}</span>
+                    <button
+                      onClick={restartFromBeginning}
+                      className="rounded-full bg-white/15 hover:bg-white/25 px-3 py-1 text-xs font-semibold transition"
+                    >
+                      Restart
+                    </button>
+                    <button
+                      onClick={() => setResumedFrom(null)}
+                      aria-label="Dismiss"
+                      className="rounded-full p-1.5 hover:bg-white/15 transition"
+                    >
+                      <X className="h-3.5 w-3.5" />
+                    </button>
                   </div>
                 )}
 
@@ -650,21 +623,26 @@ export default function MoviePlayer({
                   className={`absolute bottom-0 left-0 right-0 z-20 px-3 sm:px-4 pt-8 bg-gradient-to-t from-black/90 via-black/60 to-transparent transition-opacity duration-300 touch-manipulation ${controlsVisible ? "opacity-100" : "opacity-0 pointer-events-none"}`}
                   style={{ paddingBottom: "max(0.5rem, env(safe-area-inset-bottom))" }}
                 >
-                  {/* Seek bar */}
+                  {/* Seek bar — pointer capture enables touch drag-scrubbing */}
                   <div
-                    className="relative h-5 flex items-center cursor-pointer group/seek"
-                    onClick={handleSeek}
-                    onMouseMove={(e) => {
-                      const rect = e.currentTarget.getBoundingClientRect();
-                      const pct = Math.max(0, Math.min(1, (e.clientX - rect.left) / rect.width));
-                      setSeekPreview({ pct: pct * 100, time: pct * duration });
-                    }}
-                    onMouseLeave={() => setSeekPreview(null)}
+                    ref={seekBarRef}
+                    className="relative h-5 flex items-center cursor-pointer group/seek touch-none"
+                    onPointerDown={onSeekPointerDown}
+                    onPointerMove={onSeekPointerMove}
+                    onPointerUp={onSeekPointerUp}
+                    onPointerCancel={onSeekPointerUp}
+                    onPointerLeave={onSeekPointerLeave}
                   >
                     <div className="w-full h-1 group-hover/seek:h-1.5 rounded-full bg-white/20 transition-all relative overflow-visible">
                       <div className="absolute inset-y-0 left-0 rounded-full bg-white/30" style={{ width: `${bufferedPct}%` }} />
                       <div className="absolute inset-y-0 left-0 rounded-full bg-netflix" style={{ width: `${progressPct}%` }} />
-                      <div className="absolute top-1/2 -translate-y-1/2 h-3.5 w-3.5 rounded-full bg-netflix scale-0 group-hover/seek:scale-100 transition-transform shadow" style={{ left: `calc(${progressPct}% - 7px)` }} />
+                      {seekPreview && (
+                        <div className="absolute inset-y-0 left-0 rounded-full bg-white/70" style={{ width: `${seekPreview.pct}%` }} />
+                      )}
+                      <div
+                        className={`absolute top-1/2 -translate-y-1/2 h-3.5 w-3.5 rounded-full bg-netflix transition-transform shadow ${seekPreview ? "scale-100" : "scale-0 group-hover/seek:scale-100"}`}
+                        style={{ left: `calc(${seekPreview ? seekPreview.pct : progressPct}% - 7px)` }}
+                      />
                       {seekPreview && (
                         <div
                           className="absolute -top-8 px-1.5 py-0.5 rounded bg-black/90 text-white text-[11px] -translate-x-1/2 pointer-events-none"
@@ -709,21 +687,45 @@ export default function MoviePlayer({
                       />
                     </div>
 
-                    <span className="hidden sm:inline text-xs tabular-nums ml-1 text-white/90">
+                    <span className="text-[10px] sm:text-xs tabular-nums ml-1 text-white/90">
                       {fmt(currentTime)} <span className="text-white/50">/ {fmt(duration)}</span>
                     </span>
 
                     <div className="flex-1" />
 
-                    {/* Subtitles */}
+                    {/* Subtitles — language menu */}
                     {subtitles.length > 0 && (
-                      <button
-                        onClick={toggleSubtitles}
-                        className={`p-2 rounded-full transition ${subtitleOn ? "text-netflix" : "text-white hover:bg-white/10"}`}
-                        aria-label="Subtitles (C)"
-                      >
-                        <Subtitles className="h-5 w-5" />
-                      </button>
+                      <div className="relative" ref={subsMenuRef}>
+                        <button
+                          onClick={() => { setShowSubsMenu(!showSubsMenu); setShowQualityMenu(false); setShowSpeedMenu(false); showControls(); }}
+                          className={`p-2 rounded-full transition ${activeSub ? "text-netflix" : "text-white hover:bg-white/10"}`}
+                          aria-label="Subtitles (C)"
+                        >
+                          <Subtitles className="h-5 w-5" />
+                        </button>
+                        {showSubsMenu && (
+                          <div className="absolute bottom-full right-0 mb-3 bg-black/95 rounded-xl border border-white/10 overflow-hidden min-w-[150px] backdrop-blur-md shadow-2xl">
+                            <p className="px-4 pt-2.5 pb-1 text-[11px] uppercase tracking-wider text-white/40 font-semibold">Subtitles</p>
+                            <button
+                              onClick={() => selectSubtitle(null)}
+                              className="w-full flex items-center justify-between px-4 py-3 text-sm text-white active:bg-white/20 sm:hover:bg-white/10 transition"
+                            >
+                              <span>Off</span>
+                              {activeSub === null && <Check className="h-4 w-4 text-netflix" />}
+                            </button>
+                            {subtitles.map((s) => (
+                              <button
+                                key={s.lang}
+                                onClick={() => selectSubtitle(s.lang)}
+                                className="w-full flex items-center justify-between px-4 py-3 text-sm text-white active:bg-white/20 sm:hover:bg-white/10 transition"
+                              >
+                                <span>{s.label || ({ en: "English", mm: "မြန်မာ" } as Record<string, string>)[s.lang] || s.lang}</span>
+                                {activeSub === s.lang && <Check className="h-4 w-4 text-netflix" />}
+                              </button>
+                            ))}
+                          </div>
+                        )}
+                      </div>
                     )}
 
                     {/* Speed — menu opens ABOVE the bar, thumb-friendly */}
@@ -778,8 +780,8 @@ export default function MoviePlayer({
                     )}
 
                     {/* Fullscreen */}
-                    <button onClick={toggleFullscreen} className="p-2.5 sm:p-2 active:bg-white/20 sm:hover:bg-white/10 rounded-full transition" aria-label="Fullscreen (F)">
-                      {isFullscreen ? <Minimize className="h-5 w-5" /> : <Maximize className="h-5 w-5" />}
+                    <button onClick={toggleFs} className="p-2.5 sm:p-2 active:bg-white/20 sm:hover:bg-white/10 rounded-full transition" aria-label="Fullscreen (F)">
+                      {fsActive ? <Minimize className="h-5 w-5" /> : <Maximize className="h-5 w-5" />}
                     </button>
                   </div>
                 </div>

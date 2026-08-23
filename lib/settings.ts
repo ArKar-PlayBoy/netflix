@@ -1,4 +1,5 @@
 import { getAllSettings as dbGetAll, updateSettings as dbUpdate } from "./db";
+import { RAW_DEFAULTS } from "./app-settings";
 
 export type SettingKey =
   | "app_name"
@@ -8,17 +9,14 @@ export type SettingKey =
   | "network_threshold_3g"
   | "tmdb_region"
   | "video_extensions"
-  | "admin_password";
+  | "admin_password"
+  | "embed_enabled"
+  | "embed_movie_template"
+  | "embed_tv_template"
+  | "embed_servers";
 
-const DEFAULTS: Record<string, string> = {
-  app_name: "Vionix",
-  default_quality: "auto",
-  network_threshold_wifi: "4k",
-  network_threshold_4g: "1080p",
-  network_threshold_3g: "720p",
-  tmdb_region: "US",
-  video_extensions: ".mp4,.mkv,.webm,.avi,.mov",
-};
+/** Defaults live in app-settings.ts (single source of truth); embed_servers starts unset */
+const DEFAULTS: Record<string, string> = { ...RAW_DEFAULTS, embed_servers: "" };
 
 export async function getSetting(key: SettingKey): Promise<string> {
   const settings = await dbGetAll();

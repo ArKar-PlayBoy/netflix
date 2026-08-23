@@ -3,7 +3,7 @@
 ## Workflow control (owner: Ar Kar Moe Myint)
 
 1. **NEVER push to GitHub without explicit approval.** The owner decides when to push.
-2. **Test locally before every push.** Run `npx next build` AND verify pages work in the local dev server before asking the owner to approve a push.
+2. **Test locally before every push.** Run `npx next build`, `npm run test`, AND verify pages work in the local dev server before asking the owner to approve a push.
 3. **Ask before destructive actions**: deleting files/tables, changing auth, touching `.env`.
 4. When the owner says "push to github" / "commit", that is the only approval moment.
 5. After implementing features, summarize what changed and WAIT for the owner's test confirmation.

@@ -1,113 +1,24 @@
 import type { Metadata } from "next";
-import { MovieType, CastType, VideoType, WatchProvidersResult } from "@/types/global";
-import { getVideoByTmdbId } from "@/lib/videos";
-import { getEpisodesForSeries } from "@/lib/db";
 import Link from "next/link";
 import Image from "next/image";
 import { ArrowLeft, Star, Clock } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import Movie from "@/components/movie";
 import MoviePlayer from "@/components/movie-player";
+import EmbedPlayer from "@/components/embed-player";
 import FavoriteButton from "@/components/favorite-button";
 import WatchlistButton from "@/components/watchlist-button";
 import RatingStars from "@/components/rating-stars";
 import SeasonsList from "@/components/seasons-list";
+import { getViewPageData, getPageMetadata } from "@/lib/view-data";
 
 const IMG = "https://image.tmdb.org/t/p";
-const PROVIDER_IMG = "https://image.tmdb.org/t/p/w92";
-
-async function fetchMovie(id: string, base: string = "movie"): Promise<MovieType> {
-  const res = await fetch(`https://api.themoviedb.org/3/${base}/${id}?language=en-US`, {
-    headers: { Authorization: `Bearer ${process.env.TMDB_TOKEN}` },
-    next: { revalidate: 3600 },
-  });
-  if (!res.ok) throw new Error("Failed to fetch movie");
-  return res.json();
-}
-
-async function fetchCredits(id: string, base: string = "movie"): Promise<{ cast: CastType[]; directors: string[] }> {
-  const res = await fetch(`https://api.themoviedb.org/3/${base}/${id}/credits?language=en-US`, {
-    headers: { Authorization: `Bearer ${process.env.TMDB_TOKEN}` },
-    next: { revalidate: 3600 },
-  });
-  if (!res.ok) throw new Error("Failed to fetch credits");
-  const data = await res.json();
-  return {
-    cast: data.cast?.slice(0, 20) || [],
-    directors: data.crew?.filter((c: any) => c.job === "Director").map((c: any) => c.name) || [],
-  };
-}
-
-async function fetchVideos(id: string, base: string = "movie"): Promise<VideoType[]> {
-  const res = await fetch(`https://api.themoviedb.org/3/${base}/${id}/videos?language=en-US`, {
-    headers: { Authorization: `Bearer ${process.env.TMDB_TOKEN}` },
-    next: { revalidate: 86400 },
-  });
-  if (!res.ok) return [];
-  const data = await res.json();
-  const videos = (data.results ?? []) as VideoType[];
-  const youtube = videos.filter(v => v.site === "YouTube");
-  return [
-    ...youtube.filter(v => v.type === "Full Movie" || v.type === "Feature"),
-    ...youtube.filter(v => v.type === "Trailer" && v.official),
-    ...youtube.filter(v => v.type === "Trailer" && !v.official),
-    ...youtube.filter(v => v.type === "Teaser"),
-    ...youtube.filter(v => v.type === "Clip"),
-  ];
-}
-
-async function fetchSimilar(id: string, base: string = "movie"): Promise<MovieType[]> {
-  const res = await fetch(`https://api.themoviedb.org/3/${base}/${id}/similar?language=en-US&page=1`, {
-    headers: { Authorization: `Bearer ${process.env.TMDB_TOKEN}` },
-    next: { revalidate: 3600 },
-  });
-  if (!res.ok) return [];
-  const data = await res.json();
-  return data.results?.slice(0, 10) || [];
-}
-
-async function fetchWatchProviders(id: string, base: string = "movie"): Promise<{ us: WatchProvidersResult | null }> {
-  const res = await fetch(`https://api.themoviedb.org/3/${base}/${id}/watch/providers`, {
-    headers: { Authorization: `Bearer ${process.env.TMDB_TOKEN}` },
-    next: { revalidate: 86400 },
-  });
-  if (!res.ok) return { us: null };
-  const data = await res.json();
-  return { us: data.results?.US ?? null };
-}
-
-async function getLocalVideoData(id: string): Promise<{
-  hasLocalVideo: boolean;
-  qualities: { quality: string; file: string }[];
-  subtitles: { lang: string; label: string; file: string }[];
-}> {
-  try {
-    const video = await getVideoByTmdbId(parseInt(id));
-    if (!video) return { hasLocalVideo: false, qualities: [], subtitles: [] };
-    return {
-      hasLocalVideo: true,
-      qualities: video.qualities.map((q) => ({ quality: q.quality, file: q.file })),
-      subtitles: video.subtitles ?? [],
-    };
-  } catch {
-    return { hasLocalVideo: false, qualities: [], subtitles: [] };
-  }
-}
 
 export async function generateMetadata({ params }: { params: Promise<{ id: string }> }): Promise<Metadata> {
   const { id } = await params;
   try {
-    let base = "movie";
-    try {
-      const dbVideo = await getVideoByTmdbId(parseInt(id));
-      if (dbVideo?.media_type === "tv") base = "tv";
-    } catch {}
-    const movie = await fetchMovie(id, base);
-    const title = movie.title ?? (movie as unknown as { name?: string }).name ?? "Vionix";
-    return {
-      title: `${title} — Vionix`,
-      description: movie.overview?.slice(0, 160) || "View details.",
-    };
+    const meta = await getPageMetadata(id);
+    return meta ?? { title: "Vionix" };
   } catch {
     return { title: "Vionix" };
   }
@@ -120,32 +31,17 @@ function formatRuntime(minutes: number): string {
   return `${h}h ${m}m`;
 }
 
+function normalizeTvShape(movie: Record<string, unknown>): void {
+  movie.title = movie.title ?? movie.name;
+  movie.release_date = movie.release_date ?? movie.first_air_date;
+  const epRunTime = movie.episode_run_time as number[] | undefined;
+  movie.runtime = movie.runtime ?? (Array.isArray(epRunTime) ? epRunTime[0] : 0) ?? 0;
+}
+
 export default async function MoviePage({ params }: { params: Promise<{ id: string }> }) {
   const { id } = await params;
-
-  // Detect TV vs movie from our DB first
-  let base = "movie";
-  let dbVideoId: number | null = null;
-  let episodes: Awaited<ReturnType<typeof getEpisodesForSeries>> = [];
-  try {
-    const dbVideo = await getVideoByTmdbId(parseInt(id));
-    if (dbVideo) {
-      dbVideoId = dbVideo.id;
-      if (dbVideo.media_type === "tv") {
-        base = "tv";
-        episodes = await getEpisodesForSeries(dbVideo.id);
-      }
-    }
-  } catch {}
-
-  const [movie, credits, videos, similar, watchProviders, localVideoData] = await Promise.all([
-    fetchMovie(id, base).catch(() => null),
-    fetchCredits(id, base).catch(() => ({ cast: [], directors: [] })),
-    fetchVideos(id, base).catch(() => []),
-    fetchSimilar(id, base).catch(() => []),
-    fetchWatchProviders(id, base).catch(() => ({ us: null })),
-    getLocalVideoData(id),
-  ]);
+  const data = await getViewPageData(id);
+  const { movie, credits, videos, similar, localVideoData, embedServers, dbVideoId, episodes, base } = data;
 
   if (!movie) {
     return (
@@ -164,12 +60,7 @@ export default async function MoviePage({ params }: { params: Promise<{ id: stri
 
   // Normalize TV shape → movie shape (name→title, first_air_date→release_date, episode runtime)
   if (base === "tv") {
-    const tv = movie as unknown as Record<string, unknown>;
-    const m = movie as unknown as Record<string, unknown>;
-    m.title = m.title ?? tv.name;
-    m.release_date = m.release_date ?? tv.first_air_date;
-    const epRunTime = tv.episode_run_time as number[] | undefined;
-    m.runtime = m.runtime ?? (Array.isArray(epRunTime) ? epRunTime[0] : 0) ?? 0;
+    normalizeTvShape(movie as unknown as Record<string, unknown>);
   }
 
   return (
@@ -274,14 +165,28 @@ export default async function MoviePage({ params }: { params: Promise<{ id: stri
               {movie.overview || "No overview available."}
             </p>
             <div className="flex flex-wrap items-center gap-3 mb-4">
-              {(localVideoData.hasLocalVideo || trailer) ? (
+              {/* Playback priority: R2 upload > external embed servers > YouTube trailer */}
+              {localVideoData.hasLocalVideo ? (
                 <MoviePlayer
                   movieId={movie.id}
                   title={movie.title}
-                  hasLocalVideo={localVideoData.hasLocalVideo}
+                  hasLocalVideo={true}
                   trailerKey={trailer?.key ?? null}
                   qualities={localVideoData.qualities}
                   subtitles={localVideoData.subtitles}
+                  backdropUrl={movie.backdrop_path ? `https://image.tmdb.org/t/p/w1280${movie.backdrop_path}` : null}
+                />
+              ) : embedServers.length > 0 ? (
+                <EmbedPlayer
+                  servers={embedServers}
+                  title={movie.title}
+                />
+              ) : trailer ? (
+                <MoviePlayer
+                  movieId={movie.id}
+                  title={movie.title}
+                  hasLocalVideo={false}
+                  trailerKey={trailer?.key ?? null}
                   backdropUrl={movie.backdrop_path ? `https://image.tmdb.org/t/p/w1280${movie.backdrop_path}` : null}
                 />
               ) : (
@@ -296,50 +201,6 @@ export default async function MoviePage({ params }: { params: Promise<{ id: stri
             <div className="mb-6">
               <RatingStars movieId={movie.id} />
             </div>
-
-            {watchProviders.us && (
-              <div className="mb-8">
-                {watchProviders.us.flatrate && watchProviders.us.flatrate.length > 0 && (
-                  <div className="mb-3">
-                    <p className="text-xs text-muted-foreground uppercase tracking-wide mb-2">Stream</p>
-                    <div className="flex flex-wrap gap-2">
-                      {watchProviders.us.flatrate.map((provider) => (
-                        <a key={provider.provider_id} href={watchProviders.us!.link} target="_blank" rel="noopener noreferrer" className="inline-flex items-center gap-2 px-3 py-1.5 bg-card border rounded-lg hover:border-primary transition">
-                          <img src={`${PROVIDER_IMG}${provider.logo_path}`} alt={provider.provider_name} className="w-6 h-6 rounded" />
-                          <span className="text-sm font-medium">{provider.provider_name}</span>
-                        </a>
-                      ))}
-                    </div>
-                  </div>
-                )}
-                {watchProviders.us.rent && watchProviders.us.rent.length > 0 && (
-                  <div className="mb-3">
-                    <p className="text-xs text-muted-foreground uppercase tracking-wide mb-2">Rent</p>
-                    <div className="flex flex-wrap gap-2">
-                      {watchProviders.us.rent.map((provider) => (
-                        <a key={provider.provider_id} href={watchProviders.us!.link} target="_blank" rel="noopener noreferrer" className="inline-flex items-center gap-2 px-3 py-1.5 bg-card border rounded-lg hover:border-primary transition">
-                          <img src={`${PROVIDER_IMG}${provider.logo_path}`} alt={provider.provider_name} className="w-6 h-6 rounded" />
-                          <span className="text-sm font-medium">{provider.provider_name}</span>
-                        </a>
-                      ))}
-                    </div>
-                  </div>
-                )}
-                {watchProviders.us.buy && watchProviders.us.buy.length > 0 && (
-                  <div>
-                    <p className="text-xs text-muted-foreground uppercase tracking-wide mb-2">Buy</p>
-                    <div className="flex flex-wrap gap-2">
-                      {watchProviders.us.buy.map((provider) => (
-                        <a key={provider.provider_id} href={watchProviders.us!.link} target="_blank" rel="noopener noreferrer" className="inline-flex items-center gap-2 px-3 py-1.5 bg-card border rounded-lg hover:border-primary transition">
-                          <img src={`${PROVIDER_IMG}${provider.logo_path}`} alt={provider.provider_name} className="w-6 h-6 rounded" />
-                          <span className="text-sm font-medium">{provider.provider_name}</span>
-                        </a>
-                      ))}
-                    </div>
-                  </div>
-                )}
-              </div>
-            )}
 
             {credits.cast.length > 0 && (
               <div className="mb-8">

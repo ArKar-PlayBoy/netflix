@@ -217,3 +217,11 @@
     rgba(0, 0, 0, 0.9) 100%
   );
 }
+
+@font-face {
+  font-family: "Myanmar Angoun";
+  src: url("/fonts/MyanmarAngoun.ttf") format("truetype");
+  font-weight: 400;
+  font-style: normal;
+  font-display: swap;
+}
