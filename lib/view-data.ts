@@ -91,6 +91,10 @@ export type ViewPageData = {
   localVideoData: LocalVideoData;
   /** Per-title resolved embed URLs (R2 takes priority, so empty when a local file exists) */
   embedServers: ResolvedEmbedServer[];
+  /** Direct .mp4/.m3u8 sources — played in OUR player (CC/subtitles work) */
+  directSources: ResolvedEmbedServer[];
+  /** Subtitles attached to the lazy link-row for direct sources */
+  directSubtitles: LocalVideoData["subtitles"];
 };
 
 async function loadLocalVideoData(tmdbId: number): Promise<LocalVideoData> {
@@ -141,15 +145,29 @@ export async function getViewPageData(id: string): Promise<ViewPageData> {  cons
     getEmbedConfig(),
   ]);
 
-  // Playback priority: R2 upload > external embeds > YouTube trailer
+  // Playback priority: R2 upload > direct video links (our player, CC works) > embed iframes > YouTube trailer
+  const directSources: ResolvedEmbedServer[] = [];
   const embedServers: ResolvedEmbedServer[] = [];
   if (movie && !localVideoData.hasLocalVideo && embedConfig.enabled) {
     for (const server of embedConfig.servers) {
       const template = base === "tv" ? server.tv : server.movie;
       const url = buildEmbedUrl(template, { id: tmdbId });
-      if (url) embedServers.push({ name: server.name, url });
+      if (!url) continue;
+      if (/\.(mp4|m3u8)(\?|$)/i.test(url)) directSources.push({ name: server.name, url });
+      else embedServers.push({ name: server.name, url });
     }
   }
 
-  return { base, dbVideoId, episodes, movie, credits, videos, similar, localVideoData, embedServers };
+  // Direct-link movies get a lazy DB row so subtitles/CC attach normally
+  let directSubtitles: LocalVideoData["subtitles"] = [];
+  if (directSources.length > 0 && movie) {
+    try {
+      const { upsertLinkVideo } = await import("@/lib/db");
+      const row = await upsertLinkVideo(tmdbId, movie.title ?? "Unknown", directSources[0].url);
+      dbVideoId = row.id;
+      directSubtitles = row.subtitles ?? [];
+    } catch {}
+  }
+
+  return { base, dbVideoId, episodes, movie, credits, videos, similar, localVideoData, embedServers, directSources, directSubtitles };
 }

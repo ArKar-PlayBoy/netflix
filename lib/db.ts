@@ -29,6 +29,7 @@ export type VideoRecord = {
   id: number;
   tmdb_id: number | null;
   media_type: "movie" | "tv";
+  source_type: "r2" | "link";
   title: string;
   year: string | null;
   poster_path: string | null;
@@ -130,6 +131,7 @@ function mapVideo(row: DbVideoRow): VideoRecord {
   return {
     ...row,
     media_type: ((row as { media_type?: string }).media_type === "tv" ? "tv" : "movie") as "movie" | "tv",
+    source_type: ((row as { source_type?: string }).source_type === "link" ? "link" : "r2") as "r2" | "link",
     qualities: typeof row.qualities === "string" ? JSON.parse(row.qualities) : row.qualities,
     subtitles: Array.isArray(rawSubs)
       ? (rawSubs as VideoRecord["subtitles"])
@@ -272,6 +274,7 @@ function ensureSchema(): Promise<void> {
         ALTER TABLE videos ADD COLUMN IF NOT EXISTS subtitles JSONB DEFAULT '[]'::jsonb;
         ALTER TABLE videos ADD COLUMN IF NOT EXISTS media_type TEXT DEFAULT 'movie';
         ALTER TABLE users ADD COLUMN IF NOT EXISTS session_ver INTEGER NOT NULL DEFAULT 0;
+        ALTER TABLE videos ADD COLUMN IF NOT EXISTS source_type TEXT NOT NULL DEFAULT 'r2';
         CREATE TABLE IF NOT EXISTS security_events (
           id SERIAL PRIMARY KEY,
           ip TEXT NOT NULL,
@@ -1016,5 +1019,27 @@ export async function getRegisteredFileKeys(): Promise<Set<string>> {
 export async function setUserPassword(userId: number, passwordHash: string): Promise<void> {
   await ensureSchema();
   await getSql()`UPDATE users SET password_hash = ${passwordHash} WHERE id = ${userId}`;
+}
+
+/** Lazy row for direct-link movies (source_type='link') so subtitles/CC
+ *  attach by the same mechanism as R2 uploads. R2 rows are never touched. */
+export async function upsertLinkVideo(tmdbId: number, title: string, directUrl: string): Promise<VideoRecord> {
+  await ensureSchema();
+  const existing = await getSql()<DbVideoRow[]>`SELECT * FROM videos WHERE tmdb_id = ${tmdbId}`;
+  if (existing[0]) {
+    if ((existing[0] as { source_type?: string }).source_type === "r2") {
+      return mapVideo(existing[0]); // R2 always wins
+    }
+    const upd = await getSql()<DbVideoRow[]>`
+      UPDATE videos SET file = ${directUrl}, source_type = 'link' WHERE tmdb_id = ${tmdbId} RETURNING *
+    `;
+    return mapVideo(upd[0]);
+  }
+  const ins = await getSql()<DbVideoRow[]>`
+    INSERT INTO videos (media_type, tmdb_id, title, source_type, file, qualities)
+    VALUES ('movie', ${tmdbId}, ${title}, 'link', ${directUrl}, '[]'::jsonb)
+    RETURNING *
+  `;
+  return mapVideo(ins[0]);
 }
 

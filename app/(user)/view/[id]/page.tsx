@@ -41,7 +41,7 @@ function normalizeTvShape(movie: Record<string, unknown>): void {
 export default async function MoviePage({ params }: { params: Promise<{ id: string }> }) {
   const { id } = await params;
   const data = await getViewPageData(id);
-  const { movie, credits, videos, similar, localVideoData, embedServers, dbVideoId, episodes, base } = data;
+  const { movie, credits, videos, similar, localVideoData, embedServers, directSources, directSubtitles, dbVideoId, episodes, base } = data;
 
   if (!movie) {
     return (
@@ -165,7 +165,7 @@ export default async function MoviePage({ params }: { params: Promise<{ id: stri
               {movie.overview || "No overview available."}
             </p>
             <div className="flex flex-wrap items-center gap-3 mb-4">
-              {/* Playback priority: R2 upload > external embed servers > YouTube trailer */}
+              {/* Playback priority: R2 upload > direct video links (our player, CC works) > embed iframes > YouTube trailer */}
               {localVideoData.hasLocalVideo ? (
                 <MoviePlayer
                   movieId={movie.id}
@@ -174,6 +174,15 @@ export default async function MoviePage({ params }: { params: Promise<{ id: stri
                   trailerKey={trailer?.key ?? null}
                   qualities={localVideoData.qualities}
                   subtitles={localVideoData.subtitles}
+                  backdropUrl={movie.backdrop_path ? `https://image.tmdb.org/t/p/w1280${movie.backdrop_path}` : null}
+                />
+              ) : directSources.length > 0 ? (
+                <MoviePlayer
+                  movieId={movie.id}
+                  title={movie.title}
+                  hasLocalVideo={false}
+                  directSources={directSources}
+                  subtitles={directSubtitles}
                   backdropUrl={movie.backdrop_path ? `https://image.tmdb.org/t/p/w1280${movie.backdrop_path}` : null}
                 />
               ) : embedServers.length > 0 ? (

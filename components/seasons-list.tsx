@@ -122,9 +122,9 @@ export default function SeasonsList({
 
       {/* Episode player modal */}
       {playing && (
-        <div className="fixed inset-0 z-[200] bg-black sm:bg-black/95 sm:flex sm:items-center sm:justify-center sm:p-4" onClick={closePlayer}>
+        <div className="fixed inset-0 z-[200] bg-black lg:bg-black/95 lg:flex lg:items-center lg:justify-center lg:p-4" onClick={closePlayer}>
           <div
-            className="relative w-full h-full sm:w-auto sm:h-auto sm:max-w-5xl sm:aspect-video bg-black sm:rounded-lg overflow-hidden shadow-2xl"
+                  className="relative w-full aspect-video h-full lg:h-auto lg:max-w-5xl bg-black rounded-none lg:rounded-lg overflow-hidden shadow-2xl"
             onClick={(e) => e.stopPropagation()}
           >
             <div className="absolute top-0 left-0 right-0 z-20 flex items-center justify-between px-4 py-3 bg-gradient-to-b from-black/80 to-transparent pointer-events-none">
