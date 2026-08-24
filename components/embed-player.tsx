@@ -1,8 +1,27 @@
 "use client";
 
 import { useState, useCallback, useEffect, useRef } from "react";
-import { Play, X } from "lucide-react";
+import { Play, X, Maximize, Minimize } from "lucide-react";
 import { useFullscreen } from "@/components/player/use-fullscreen";
+
+/** YouTube embeds: force Burmese captions ON (auto-translated by YouTube
+ *  where available). Other providers pass through untouched. */
+function withYouTubeCaptions(url: string): string {
+  try {
+    const u = new URL(url);
+    const host = u.hostname.replace(/^www\./, "");
+    const isYouTube =
+      (host === "youtube.com" || host === "m.youtube.com" || host === "youtube-nocookie.com") &&
+      u.pathname.startsWith("/embed/");
+    if (!isYouTube) return url;
+    u.searchParams.set("cc_load_policy", "1");
+    u.searchParams.set("cc_lang_pref", "mm");
+    u.searchParams.set("hl", "mm");
+    return u.toString();
+  } catch {
+    return url;
+  }
+}
 
 /**
  * External multi-server embed playback.
@@ -178,11 +197,18 @@ export default function EmbedPlayer({
             }
             onClick={(e) => e.stopPropagation()}
           >
-            {/* Top bar — close only (provider owns fullscreen, below) */}
+            {/* Top bar — close + our fullscreen */}
             <div
               className={`absolute top-0 right-0 z-30 flex items-center gap-2 p-3 transition-opacity duration-300 ${chromeVisible ? "opacity-100" : "opacity-0 pointer-events-none"}`}
               style={{ paddingTop: "max(0.75rem, env(safe-area-inset-top))" }}
             >
+              <button
+                onClick={fs.toggle}
+                className="p-1.5 bg-white/20 rounded-full text-white hover:bg-white/30 transition pointer-events-auto"
+                aria-label="Fullscreen"
+              >
+                {fs.isActive ? <Minimize className="h-4 w-4" /> : <Maximize className="h-4 w-4" />}
+              </button>
               <button onClick={closeModal} className="p-1.5 bg-white/20 rounded-full text-white hover:bg-white/30 transition pointer-events-auto">
                 <X className="h-4 w-4" />
               </button>
@@ -232,30 +258,12 @@ export default function EmbedPlayer({
             {!probing && activeServer && (
               <iframe
                 key={`${activeIdx}-${reloadNonce}`}
-                src={activeServer.url}
+                src={withYouTubeCaptions(activeServer.url)}
                 title={title}
                 className="w-full h-full"
                 referrerPolicy="no-referrer"
                 allow="autoplay; fullscreen; encrypted-media; picture-in-picture"
                 allowFullScreen
-              />
-            )}
-
-            {/*
-              Fullscreen click-forwarder: the provider's own fullscreen icon
-              (bottom-right of their control bar) is dead — cross-origin frames
-              can't fullscreen the top page and we can't patch their code.
-              This INVISIBLE overlay sits over that icon and forwards taps to
-              our fullscreen (which fullscreens our container). Result: one
-              visible icon (theirs), and it works. If they redesign their
-              control bar, adjust this single div.
-            */}
-            {!probing && activeServer && (
-              <div
-                onClick={fs.toggle}
-                title="Fullscreen"
-                aria-label="Fullscreen"
-                className="absolute bottom-0 right-0 w-16 h-12 cursor-pointer pointer-events-auto z-10"
               />
             )}
 
